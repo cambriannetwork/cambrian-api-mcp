@@ -1,0 +1,43 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.cambriannetwork/cambrian-api",
+  "description": "Cambrian API MCP server for Solana, Base, Deep42 social intelligence, and perpetual risk data.",
+  "repository": {
+    "url": "https://github.com/cambriannetwork/cambrian-api-mcp",
+    "source": "github"
+  },
+  "version": "1.2.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "cambrian-api-mcp",
+      "version": "1.2.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "CAMBRIAN_API_KEY",
+          "description": "Your Cambrian API key.",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        }
+      ]
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://cambrian-mcp-server-prod-981646676182.us-central1.run.app/mcp",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Bearer token in the form: Bearer <CAMBRIAN_API_KEY>",
+          "isRequired": true,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

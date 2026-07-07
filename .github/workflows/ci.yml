@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test and Package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Audit
+        run: npm audit --audit-level=moderate
+
+      - name: Public safety
+        run: npm run check:public
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify MCP artifact
+        run: |
+          head -n 1 dist/index.js | grep '#!/usr/bin/env node'
+          test -x dist/index.js
+          node dist/index.js --version
+          node --input-type=module -e "const m = await import('./dist/server.js'); const tools = m.listMcpTools(); if (tools.length < 79) throw new Error('Expected at least 79 tools'); if (!tools.some((tool) => tool.name === 'cambrian_docs')) throw new Error('Missing cambrian_docs');"
+
+      - name: Verify package contents
+        run: npm pack --dry-run
