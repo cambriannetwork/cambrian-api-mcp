@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { realpathSync } from 'node:fs';
 import express, { type Request, type Response } from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
@@ -272,8 +273,16 @@ async function main(): Promise<void> {
 
 // Only auto-run when invoked as the entrypoint (e.g. `node dist/index.js`),
 // not when imported by tests for the exported helpers.
-const invokedDirectly =
-  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+export function isDirectEntrypoint(argv1: string | undefined, moduleUrl = import.meta.url): boolean {
+  if (!argv1) return false;
+  try {
+    return moduleUrl === pathToFileURL(realpathSync(argv1)).href;
+  } catch {
+    return moduleUrl === pathToFileURL(argv1).href;
+  }
+}
+
+const invokedDirectly = isDirectEntrypoint(process.argv[1]);
 if (invokedDirectly) {
   main().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));

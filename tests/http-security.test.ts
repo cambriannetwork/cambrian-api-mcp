@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { Request, Response } from 'express';
 import {
   createCorsOptions,
   extractApiKey,
   getAllowedOrigins,
+  isDirectEntrypoint,
   isOriginAllowed,
   validateOrigin,
 } from '../src/index.js';
@@ -131,5 +136,20 @@ describe('extractApiKey precedence', () => {
   it('returns null when neither header yields a key', () => {
     expect(extractApiKey(req({}))).toBeNull();
     expect(extractApiKey(req({ authorization: 'Bearer   ' }))).toBeNull();
+  });
+});
+
+describe('entrypoint detection', () => {
+  it('treats an npm-style symlink to the built bin as direct invocation', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cambrian-bin-'));
+    try {
+      const target = join(dir, 'dist-index.js');
+      const link = join(dir, 'cambrian-api-mcp');
+      writeFileSync(target, '#!/usr/bin/env node\n');
+      symlinkSync(target, link);
+      expect(isDirectEntrypoint(link, pathToFileURL(realpathSync(target)).href)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
