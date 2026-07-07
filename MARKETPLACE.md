@@ -35,7 +35,7 @@ npx -y cambrian-api-mcp
 
 ```bash
 claude mcp add --transport http cambrian-api \
-  https://cambrian-mcp-server-prod-981646676182.us-central1.run.app/mcp \
+  https://mcp.cambrian.org/mcp \
   --header "Authorization: Bearer YOUR_CAMBRIAN_API_KEY"
 ```
 

@@ -31,6 +31,7 @@ const forbiddenTerms = [
   text('68', '+ total'),
   text('68', '+ DeFi Tools'),
   text('cambrian-mcp-', 'verisense'),
+  text('cambrian-mcp-server-prod-', '981646676182.us-central1.run.app'),
 ];
 
 const skipDirs = new Set(['.git']);

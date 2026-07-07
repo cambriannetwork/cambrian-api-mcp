@@ -29,7 +29,7 @@
   "remotes": [
     {
       "type": "streamable-http",
-      "url": "https://cambrian-mcp-server-prod-981646676182.us-central1.run.app/mcp",
+      "url": "https://mcp.cambrian.org/mcp",
       "headers": [
         {
           "name": "Authorization",

@@ -53,7 +53,7 @@ Direct Claude setup:
 
 ```bash
 claude mcp add --transport http cambrian \
-  https://cambrian-mcp-server-prod-981646676182.us-central1.run.app/mcp \
+  https://mcp.cambrian.org/mcp \
   --header "Authorization: Bearer YOUR_CAMBRIAN_API_KEY"
 ```
 
@@ -132,4 +132,4 @@ The workflow:
 io.github.cambriannetwork/cambrian-api
 ```
 
-The current manifest keeps the verified hosted Cloud Run endpoint. Switch the remote URL to `https://mcp.cambrian.org/mcp` only after DNS resolves and a production MCP smoke test passes through that hostname.
+The manifest uses `https://mcp.cambrian.org/mcp`, matching the production edge URL emitted by CI/CD. Do not publish the registry entry until DNS resolves and a production MCP smoke test passes through that hostname.
