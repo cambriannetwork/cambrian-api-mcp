@@ -6,7 +6,7 @@ Authentication is BYOK only. The hosted server and local package both require th
 
 ## What You Get
 
-- 74 generated endpoint tools from Cambrian API metadata
+- 70 generated public endpoint tools from Cambrian API metadata
 - 4 composite workflow tools for token snapshots, token resolution, API health, and usage probes
 - `cambrian_docs` for live docs from `https://docs.cambrian.org/llms.txt`
 - stdio transport for local MCP clients
@@ -90,7 +90,7 @@ Tool names are canonical and prefixed with `cambrian_`.
 
 Examples:
 
-- `cambrian_base_chains`
+- `cambrian_base_dexes`
 - `cambrian_solana_price_current`
 - `cambrian_deep42_social_data_alpha_tweet_detection`
 - `cambrian_risk_perp_risk_engine`

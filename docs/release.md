@@ -18,11 +18,17 @@ Confirm the dry-run package includes `dist/index.js` and `dist/server.js`, and e
 
 ## Publish
 
-Publish from this public repository only:
+Confirm `NPM_TOKEN` and the `npm-production` environment are configured, then
+push the version tag from this public repository:
 
 ```bash
-npm publish --provenance --access public
+version="v$(node -p "require('./package.json').version")"
+git tag "$version"
+git push origin main "$version"
 ```
+
+The tag-triggered release workflow repeats verification, publishes with npm
+provenance, and creates the GitHub release. Do not publish manually.
 
 Then verify:
 

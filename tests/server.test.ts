@@ -1,4 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { CambrianData } from 'cambrian';
 import { CAMBRIAN_MCP_TOOLS } from 'cambrian/metadata';
 import {
@@ -9,7 +11,6 @@ import {
   RISK_TOOL_TIMEOUT_MS,
   SERVER_VERSION,
   baseServerInstructions,
-  buildServerInstructions,
   buildToolInputSchema,
   buildToolResult,
   callCambrianHealth,
@@ -17,6 +18,7 @@ import {
   callCambrianUsage,
   callResolveToken,
   callSolanaTokenSnapshot,
+  createCambrianMcpServer,
   docPathForTool,
   endpointDocsUrl,
   fetchDocumentationForTest,
@@ -52,8 +54,10 @@ describe('Cambrian MCP tools', () => {
 
   it('lists canonical tools and docs tool', () => {
     const tools = listMcpTools();
+    expect(tools).toHaveLength(75);
     expect(tools.some((tool) => tool.name === DOCS_TOOL_NAME)).toBe(true);
-    expect(tools.some((tool) => tool.name === 'cambrian_base_chains')).toBe(true);
+    expect(tools.some((tool) => tool.name === 'cambrian_base_chains')).toBe(false);
+    expect(tools.some((tool) => tool.name === 'cambrian_base_dexes')).toBe(true);
     expect(tools.some((tool) => tool.name === 'cambrian_solana_price_current')).toBe(true);
     expect(tools.some((tool) => tool.name === 'cambrian_deep42_social_data_alpha_tweet_detection')).toBe(true);
     expect(tools.some((tool) => tool.name === 'cambrian_risk_perp_risk_engine')).toBe(true);
@@ -83,10 +87,10 @@ describe('Cambrian MCP tools', () => {
   });
 
   it('routes Base tools through Opabinia client', async () => {
-    const tool = CAMBRIAN_MCP_TOOLS.find((candidate) => candidate.name === 'cambrian_base_chains')!;
+    const tool = CAMBRIAN_MCP_TOOLS.find((candidate) => candidate.name === 'cambrian_base_dexes')!;
     const result = await callCambrianTool(new CambrianData({ apiKey: 'test' }), tool, {});
     expect(result).toMatchObject({ ok: true, client: 'opabinia' });
-    expect(calls[0]).toMatchObject({ client: 'opabinia', apiPath: '/api/v1/evm/chains' });
+    expect(calls[0]).toMatchObject({ client: 'opabinia', apiPath: '/api/v1/evm/dexes' });
   });
 
   it('routes Deep42 and Risk tools through their service clients', async () => {
@@ -221,19 +225,19 @@ describe('toStructuredError', () => {
 
 describe('docs path helpers', () => {
   it('derives the docs path from a tool apiPath (strips /api/v1/)', () => {
-    const chains = CAMBRIAN_MCP_TOOLS.find((t) => t.name === 'cambrian_base_chains')!;
+    const dexes = CAMBRIAN_MCP_TOOLS.find((t) => t.name === 'cambrian_base_dexes')!;
     const price = CAMBRIAN_MCP_TOOLS.find((t) => t.name === 'cambrian_solana_price_current')!;
     const risk = CAMBRIAN_MCP_TOOLS.find((t) => t.name === 'cambrian_risk_perp_risk_engine')!;
-    expect(docPathForTool(chains)).toBe('evm/chains');
+    expect(docPathForTool(dexes)).toBe('evm/dexes');
     expect(docPathForTool(price)).toBe('solana/price-current');
     expect(docPathForTool(risk)).toBe('perp-risk-engine');
   });
 
   it('normalizeDocPath trims, drops api/v1, and aliases base -> evm', () => {
     expect(normalizeDocPath('/solana/price-current/')).toBe('solana/price-current');
-    expect(normalizeDocPath('base/chains')).toBe('evm/chains');
+    expect(normalizeDocPath('base/dexes')).toBe('evm/dexes');
     expect(normalizeDocPath('base')).toBe('evm');
-    expect(normalizeDocPath('api/v1/evm/chains')).toBe('evm/chains');
+    expect(normalizeDocPath('api/v1/evm/dexes')).toBe('evm/dexes');
     // does not alias a `base` that is not the first segment
     expect(normalizeDocPath('solana/base-pool')).toBe('solana/base-pool');
   });
@@ -246,8 +250,8 @@ describe('docs path helpers', () => {
 describe('tool description docs pointers', () => {
   it('appends a cambrian_docs pointer with the endpoint path to every endpoint tool', () => {
     const tools = listMcpTools();
-    const chains = tools.find((t) => t.name === 'cambrian_base_chains')!;
-    expect(chains.description).toContain(`call ${DOCS_TOOL_NAME} with path "evm/chains"`);
+    const dexes = tools.find((t) => t.name === 'cambrian_base_dexes')!;
+    expect(dexes.description).toContain(`call ${DOCS_TOOL_NAME} with path "evm/dexes"`);
     const price = tools.find((t) => t.name === 'cambrian_solana_price_current')!;
     expect(price.description).toContain('Query Cambrian solana price current data.');
     expect(price.description).toContain(`call ${DOCS_TOOL_NAME} with path "solana/price-current"`);
@@ -271,23 +275,23 @@ describe('cambrian_docs resolution', () => {
   });
 
   it('aliases base/... to the evm per-endpoint URL', async () => {
-    const evmUrl = `${DOCS_BASE_URL}/api/v1/evm/chains/llms.txt`;
+    const evmUrl = `${DOCS_BASE_URL}/api/v1/evm/dexes/llms.txt`;
     const fetchFn = mockFetch({
-      [evmUrl]: { body: 'EVM CHAINS per-endpoint docs' },
+      [evmUrl]: { body: 'EVM DEXES per-endpoint docs' },
       [DOCS_ROOT_URL]: { body: 'root index' },
     });
-    const out = await fetchDocumentationForTest(fetchFn, { path: 'base/chains' });
-    expect(out).toContain('EVM CHAINS per-endpoint docs');
+    const out = await fetchDocumentationForTest(fetchFn, { path: 'base/dexes' });
+    expect(out).toContain('EVM DEXES per-endpoint docs');
   });
 
   it('falls back to the root index (line-filtered) when the per-endpoint page is missing', async () => {
     // per-endpoint URL not in routes -> 404 -> fall back to root, filter by path
     const fetchFn = mockFetch({
-      [DOCS_ROOT_URL]: { body: 'solana/price-current - current price\nsolana/ohlcv - candles\nevm/chains - chain list' },
+      [DOCS_ROOT_URL]: { body: 'solana/price-current - current price\nsolana/ohlcv - candles\nevm/dexes - DEX list' },
     });
     const out = await fetchDocumentationForTest(fetchFn, { path: 'solana/price-current' });
     expect(out).toContain('solana/price-current - current price');
-    expect(out).not.toContain('evm/chains - chain list');
+    expect(out).not.toContain('evm/dexes - DEX list');
   });
 
   it('falls back to root when the per-endpoint URL serves an HTML landing page', async () => {
@@ -314,24 +318,17 @@ describe('cambrian_docs resolution', () => {
   });
 });
 
-describe('server instructions enrichment', () => {
+describe('server instructions', () => {
   it('base instructions point at the cambrian_docs tool', () => {
     const base = baseServerInstructions();
     expect(base).toContain(DOCS_TOOL_NAME);
     expect(base.toLowerCase()).toContain('parameters');
   });
 
-  it('enriches with the live docs index when reachable', async () => {
-    const fetchFn = mockFetch({ [DOCS_ROOT_URL]: { body: 'LIVE DOCS INDEX CONTENT' } });
-    const out = await buildServerInstructions(fetchFn);
-    expect(out).toContain('LIVE DOCS INDEX CONTENT');
-    expect(out).toContain(DOCS_TOOL_NAME);
-  });
-
-  it('silently falls back to base instructions when the docs fetch fails', async () => {
-    const failing = (async () => { throw new Error('network down'); }) as unknown as typeof globalThis.fetch;
-    const out = await buildServerInstructions(failing);
-    expect(out).toBe(baseServerInstructions());
+  it('does not fetch llms.txt while constructing a data server', () => {
+    const fetchFn = vi.fn() as unknown as typeof globalThis.fetch;
+    createCambrianMcpServer({ apiKey: 'test', fetch: fetchFn });
+    expect(fetchFn).not.toHaveBeenCalled();
   });
 });
 
@@ -417,6 +414,53 @@ describe('buildToolResult', () => {
     expect(result.content[0].text).toContain('"riskProbability"');
   });
 
+  it('wraps a plain JSON array in an MCP-compatible object', () => {
+    const result = buildToolResult([{ symbol: 'SOL' }], 30000, now);
+    expect(result.structuredContent).toEqual({
+      items: [{ symbol: 'SOL' }],
+      itemCount: 1,
+      retrievedAt: now,
+    });
+  });
+
+  it('wraps arrays of TableResponses in an MCP-compatible object', () => {
+    const result = buildToolResult([{
+      columns: [{ name: 'blockNumber', type: 'UInt64' }],
+      data: [[123]],
+      rows: 1,
+    }], 30000, now);
+    expect(result.structuredContent).toMatchObject({
+      tableCount: 1,
+      tables: [{ records: [{ blockNumber: 123 }], rowCount: 1 }],
+      retrievedAt: now,
+    });
+  });
+
+  it('passes an array response through the MCP SDK result validator', async () => {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createCambrianMcpServer({
+      apiKey: 'test',
+      fetch: (async () => new Response(JSON.stringify([{
+        columns: [{ name: 'blockNumber', type: 'UInt64' }],
+        data: [[123]],
+        rows: 1,
+      }]), { headers: { 'content-type': 'application/json' } })) as typeof globalThis.fetch,
+    });
+    const client = new Client({ name: 'array-test', version: '1.0.0' }, { capabilities: {} });
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const result = await client.callTool({
+        name: 'cambrian_solana_latest_block',
+        arguments: {},
+      });
+      expect(result.structuredContent).toMatchObject({ tableCount: 1 });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it('returns plain text for a string result', () => {
     const result = buildToolResult('raw text', 30000, now);
     expect(result.structuredContent).toBeUndefined();
@@ -485,11 +529,14 @@ describe('callSolanaTokenSnapshot', () => {
     expect(clients.has('deep42')).toBe(true);
   });
 
-  it('omits tokenSymbol from deep42 call when not provided', async () => {
+  it('never calls the hidden Deep42 discovery endpoint', async () => {
     const client = new CambrianData({ apiKey: 'test' });
-    await callSolanaTokenSnapshot(client, 'TokenMint', undefined, '2026-01-01T00:00:00.000Z');
-    const d42Calls = calls.filter((c) => c.client === 'deep42' && c.apiPath.includes('project-metadata'));
-    expect(d42Calls[0]?.params).not.toHaveProperty('project_symbols');
+    const result = await callSolanaTokenSnapshot(client, 'TokenMint', undefined, '2026-01-01T00:00:00.000Z') as {
+      deep42: Record<string, unknown>;
+    };
+    expect(calls.some((call) => call.apiPath.includes('/discovery/'))).toBe(false);
+    expect(result.deep42).toHaveProperty('sentimentShifts');
+    expect(result.deep42).not.toHaveProperty('projectMetadata');
   });
 });
 
@@ -503,6 +550,14 @@ describe('callCambrianHealth', () => {
     expect(Array.isArray(result.services)).toBe(true);
     const services = result.services as Array<{ service: string; status: string }>;
     expect(services.every((s) => s.status === 'up')).toBe(true);
+    expect(calls.some((call) => call.apiPath === '/api/v1/evm/dexes')).toBe(true);
+    expect(calls.some((call) => call.apiPath === '/api/v1/evm/chains')).toBe(false);
+    expect(calls.find((call) => call.client === 'risk')?.params).toMatchObject({
+      entry_price: expect.any(Number),
+      leverage: expect.any(Number),
+      direction: expect.any(String),
+      risk_horizon: expect.any(String),
+    });
   });
 
   it('reports degraded when a service is down, without throwing', async () => {
@@ -524,6 +579,12 @@ describe('callCambrianUsage', () => {
     const result = await callCambrianUsage(client, '2026-01-01T00:00:00.000Z') as Record<string, unknown>;
     expect(result.retrievedAt).toBe('2026-01-01T00:00:00.000Z');
     expect(Array.isArray(result.services)).toBe(true);
+    expect(calls.find((call) => call.client === 'risk')?.params).toMatchObject({
+      entry_price: expect.any(Number),
+      leverage: expect.any(Number),
+      direction: expect.any(String),
+      risk_horizon: expect.any(String),
+    });
   });
 
   it('reports error per service without throwing on failure', async () => {

@@ -28,6 +28,13 @@ export class CambrianData {
   opabinia = {
     query: async (apiPath: string, params: Record<string, unknown> = {}) => {
       calls.push({ client: 'opabinia', apiPath, params });
+      if (apiPath === '/api/v1/solana/latest-block') {
+        return [{
+          columns: [{ name: 'blockNumber', type: 'UInt64' }],
+          data: [[123]],
+          rows: 1,
+        }];
+      }
       return { ok: true, client: 'opabinia', apiPath, params };
     },
   };

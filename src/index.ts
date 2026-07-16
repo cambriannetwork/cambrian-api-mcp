@@ -8,7 +8,7 @@ import { createHash } from 'crypto';
 import { pathToFileURL } from 'url';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { buildServerInstructions, createCambrianMcpServer, listMcpTools, SERVER_NAME, SERVER_VERSION } from './server.js';
+import { baseServerInstructions, createCambrianMcpServer, listMcpTools, SERVER_NAME, SERVER_VERSION } from './server.js';
 
 const DEFAULT_PORT = 8080;
 const DEFAULT_HTTP_HOST = '127.0.0.1';
@@ -156,9 +156,7 @@ async function runStdio(): Promise<void> {
     process.exitCode = 2;
     return;
   }
-  // Best-effort: enrich instructions with the live docs index once at startup
-  // (silent fallback to static instructions if the docs site is unreachable).
-  const instructions = await buildServerInstructions();
+  const instructions = baseServerInstructions();
   const server = createCambrianMcpServer({ apiKey, instructions });
   await server.connect(new StdioServerTransport());
 }
@@ -167,10 +165,7 @@ async function runHttp(options: CliOptions): Promise<void> {
   const app = express();
   app.set('trust proxy', 1);
 
-  // Enrich instructions with the live docs index ONCE at startup and reuse the
-  // cached value for every per-request server (never per request — silent
-  // fallback to static instructions if the docs site is unreachable).
-  const instructions = await buildServerInstructions();
+  const instructions = baseServerInstructions();
 
   // CORS uses the same central origin policy as validateOrigin() so the
   // preflight and the actual request never disagree. With ALLOWED_ORIGINS

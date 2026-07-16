@@ -39,6 +39,7 @@ export const MAX_RESPONSE_LENGTH_CAP = 100000;
 // async/cached fix requires an upstream risk.cambrian.network job/poll API
 // (not yet available).
 export const RISK_TOOL_TIMEOUT_MS = 40000;
+const RISK_TOOL = CAMBRIAN_MCP_TOOLS.find((tool) => tool.name === 'cambrian_risk_perp_risk_engine')!;
 
 export const LLMS_BASE = 'https://docs.cambrian.org';
 /** Base URL for docs (alias for test imports). */
@@ -132,28 +133,6 @@ export function endpointDocsUrl(normalizedPath: string): string {
   return `${DOCS_BASE_URL}/api/v1/${normalizedPath}/llms.txt`;
 }
 
-// WS1: Optional startup enrichment. Fetch root llms.txt once and hold in
-// memory for the server-instructions warm-up. Silent fallback.
-let _rootLlmsTxt: string | null = null;
-
-export async function fetchRootLlmsTxt(fetchFn: typeof globalThis.fetch): Promise<void> {
-  try {
-    const response = await fetchFn(DOCS_ROOT_URL, {
-      headers: { Accept: 'text/plain' },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (response.ok) {
-      _rootLlmsTxt = await response.text();
-    }
-  } catch {
-    // Silent fallback — startup succeeds even without docs.
-  }
-}
-
-export function getRootLlmsTxt(): string | null {
-  return _rootLlmsTxt;
-}
-
 /**
  * Return the static base MCP server instructions string.
  *
@@ -163,38 +142,13 @@ export function getRootLlmsTxt(): string | null {
 export function baseServerInstructions(): string {
   return (
     `This is the Cambrian API MCP server. ` +
-    `It provides 1:1 tools for every Cambrian API endpoint (Solana DeFi, Base chain DeFi, ` +
+    `It provides 1:1 tools for every public Cambrian API endpoint (Solana DeFi, Base chain DeFi, ` +
     `Deep42 social intelligence, and perpetual risk analysis) plus composite workflow tools. ` +
     `Use the \`${DOCS_TOOL_NAME}\` tool to fetch live per-endpoint documentation including ` +
     `parameters, units, constraints, and response-field meanings from ` +
-    `docs.cambrian.org/llms.txt before calling any data tool. ` +
+    `docs.cambrian.org/llms.txt when parameter or response-field detail is needed. ` +
     `Note: "base" is an alias for \`evm\` in docs paths.`
   );
-}
-
-/**
- * Build the MCP server instructions string.
- *
- * Returns baseServerInstructions() enriched by a snippet from the live root
- * llms.txt when reachable. Silent fallback to the static base on any error.
- */
-export async function buildServerInstructions(
-  fetchFn: typeof globalThis.fetch = globalThis.fetch,
-): Promise<string> {
-  const base = baseServerInstructions();
-  try {
-    const response = await fetchFn(DOCS_ROOT_URL, {
-      headers: { Accept: 'text/plain' },
-    });
-    if (response.ok) {
-      const text = await response.text();
-      const snippet = text.slice(0, 2000);
-      return `${base}\n\nAvailable endpoints (from docs.cambrian.org/llms.txt):\n${snippet}`;
-    }
-  } catch {
-    // Silent fallback.
-  }
-  return base;
 }
 
 /**
@@ -223,7 +177,7 @@ export function listMcpTools() {
       name: DOCS_TOOL_NAME,
       description:
         'Get Cambrian API documentation from docs.cambrian.org/llms.txt. ' +
-        'Provide an endpoint path (e.g. "solana/price-current", "base/chains", ' +
+        'Provide an endpoint path (e.g. "solana/price-current", "base/dexes", ' +
         '"deep42/social-data/sentiment-shifts") to fetch the per-endpoint docs with ' +
         'full parameter descriptions, units, constraints, and response-field meanings. ' +
         '"base" is an alias for `evm` in endpoint paths. ' +
@@ -235,7 +189,7 @@ export function listMcpTools() {
             type: 'string',
             description:
               'Endpoint path to fetch docs for. E.g. "solana/price-current", ' +
-              '"base/chains" (alias for `evm/chains`), "deep42/social-data/sentiment-shifts". ' +
+              '"base/dexes" (alias for `evm/dexes`), "deep42/social-data/sentiment-shifts". ' +
               'Omit for the root llms.txt index.',
           },
           _maxResponseLength: {
@@ -270,7 +224,7 @@ export function listMcpTools() {
       name: 'cambrian_solana_token_snapshot',
       description:
         'Full Solana token snapshot: concurrently fetches token details, current price, ' +
-        '24 h/7 d/30 d price-volume, top holders, pool list, and Deep42 project metadata + ' +
+        '24 h/7 d/30 d price-volume, top holders, pool list, and Deep42 ' +
         'sentiment shifts. Tolerates partial failures. Returns retrievedAt timestamp. ' +
         `Call \`${DOCS_TOOL_NAME}\` with path="solana" for full field docs.`,
       inputSchema: {
@@ -278,7 +232,7 @@ export function listMcpTools() {
         required: ['token_address'],
         properties: {
           token_address: { type: 'string', description: 'Solana token mint address.' },
-          token_symbol: { type: 'string', description: 'Optional token ticker/symbol for Deep42 lookup.' },
+          token_symbol: { type: 'string', description: 'Optional token ticker/symbol included in the snapshot result.' },
         },
       },
     },
@@ -530,6 +484,7 @@ async function fetchDocumentation(
   async function fetchRoot(): Promise<string> {
     const response = await fetchFn(DOCS_ROOT_URL, {
       headers: { Accept: 'text/plain' },
+      signal: AbortSignal.timeout(8000),
     });
     if (!response.ok) {
       throw new Error(`Documentation unreachable: root request failed with HTTP ${response.status}.`);
@@ -547,6 +502,7 @@ async function fetchDocumentation(
     const perEndpointUrl = endpointDocsUrl(normalized);
     const response = await fetchFn(perEndpointUrl, {
       headers: { Accept: 'text/plain' },
+      signal: AbortSignal.timeout(8000),
     });
     if (response.ok) {
       const body = await response.text();
@@ -681,14 +637,15 @@ type ToolResultContent = Array<{ type: string; text?: string; [key: string]: unk
  *
  * - `TableResponse` -> structuredContent with records/schema/rowCount/retrievedAt
  *   + compact text fallback (truncated by maxLength).
- * - Deep42 / Risk JSON -> structuredContent with the raw object + compact text fallback.
+ * - JSON arrays -> structuredContent wrapped in an object required by the MCP schema.
+ * - Deep42 / Risk JSON objects -> structuredContent with the raw object + compact text fallback.
  * - Strings pass through as plain text.
  */
 export function buildToolResult(
   result: unknown,
   maxLength: number,
   retrievedAt: string,
-): { content: ToolResultContent; structuredContent?: unknown } {
+): { content: ToolResultContent; structuredContent?: Record<string, unknown> } {
   if (isTableResponse(result)) {
     const structured = tableResponseToStructured(result, retrievedAt);
     // Compact text fallback: first few records + schema.
@@ -699,7 +656,21 @@ export function buildToolResult(
     );
     return {
       content: [{ type: 'text', text: compactText }],
-      structuredContent: structured,
+      structuredContent: { ...structured },
+    };
+  }
+
+  if (Array.isArray(result)) {
+    const structuredContent = result.length > 0 && result.every(isTableResponse)
+      ? {
+          tables: result.map((table) => tableResponseToStructured(table, retrievedAt)),
+          tableCount: result.length,
+          retrievedAt,
+        }
+      : { items: result, itemCount: result.length, retrievedAt };
+    return {
+      content: [{ type: 'text', text: truncateText(JSON.stringify(structuredContent, null, 2), maxLength) }],
+      structuredContent,
     };
   }
 
@@ -708,7 +679,7 @@ export function buildToolResult(
     const text = truncateText(JSON.stringify(result, null, 2), maxLength);
     return {
       content: [{ type: 'text', text }],
-      structuredContent: result,
+      structuredContent: result as Record<string, unknown>,
     };
   }
 
@@ -763,7 +734,7 @@ export async function callSolanaTokenSnapshot(
   tokenSymbol: string | undefined,
   retrievedAt: string,
 ): Promise<unknown> {
-  const [details, price, pv24h, pv7d, pv30d, holders, pools, deep42Meta, sentiment] = await Promise.all([
+  const [details, price, pv24h, pv7d, pv30d, holders, pools, sentiment] = await Promise.all([
     trySection('token-details', () =>
       client.opabinia.query('/api/v1/solana/token-details', { token_address: tokenAddress })
     ),
@@ -785,14 +756,6 @@ export async function callSolanaTokenSnapshot(
     trySection('token-pool-search', () =>
       client.opabinia.query('/api/v1/solana/token-pool-search', { token_address: tokenAddress })
     ),
-    trySection('deep42-project-metadata', () => {
-      const params: Record<string, unknown> = { chain: 'solana', limit: 1 };
-      if (tokenSymbol) params.project_symbols = tokenSymbol;
-      return client.deep42.query(
-        '/api/v1/deep42/discovery/project-metadata',
-        params as Record<string, string | number | boolean | undefined>,
-      );
-    }),
     trySection('deep42-sentiment-shifts', () =>
       client.deep42.query('/api/v1/deep42/social-data/sentiment-shifts', {})
     ),
@@ -806,7 +769,7 @@ export async function callSolanaTokenSnapshot(
     priceVolume: { h24: pv24h, d7: pv7d, d30: pv30d },
     holders,
     pools,
-    deep42: { projectMetadata: deep42Meta, sentimentShifts: sentiment },
+    deep42: { sentimentShifts: sentiment },
   };
 }
 
@@ -831,9 +794,13 @@ export async function callCambrianHealth(
 
   const [solana, base, deep42, risk] = await Promise.all([
     probe('solana', () => client.opabinia.query('/api/v1/solana/latest-block', {})),
-    probe('base', () => client.opabinia.query('/api/v1/evm/chains', {})),
+    probe('base', () => client.opabinia.query('/api/v1/evm/dexes', {})),
     probe('deep42', () => client.deep42.query('/api/v1/deep42/social-data/sentiment-shifts', {})),
-    probe('risk', () => client.risk.query('/api/v1/perp-risk-engine', {})),
+    probe('risk', () => withTimeout(
+      callCambrianTool(client, RISK_TOOL, {}),
+      RISK_TOOL_TIMEOUT_MS,
+      RISK_TOOL.name,
+    )),
   ]);
 
   const services = [solana, base, deep42, risk] as Array<{
@@ -866,9 +833,13 @@ export async function callCambrianUsage(
 
   const [solana, base, deep42, risk] = await Promise.all([
     probeUsage('solana', () => client.opabinia.query('/api/v1/solana/latest-block', {})),
-    probeUsage('base', () => client.opabinia.query('/api/v1/evm/chains', {})),
+    probeUsage('base', () => client.opabinia.query('/api/v1/evm/dexes', {})),
     probeUsage('deep42', () => client.deep42.query('/api/v1/deep42/social-data/sentiment-shifts', {})),
-    probeUsage('risk', () => client.risk.query('/api/v1/perp-risk-engine', {})),
+    probeUsage('risk', () => withTimeout(
+      callCambrianTool(client, RISK_TOOL, {}),
+      RISK_TOOL_TIMEOUT_MS,
+      RISK_TOOL.name,
+    )),
   ]);
 
   return { retrievedAt, services: [solana, base, deep42, risk] };
@@ -936,10 +907,6 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
       ...(options.instructions ? { instructions: options.instructions } : {}),
     },
   );
-
-  // WS1: Kick off root llms.txt fetch at startup to warm the in-memory cache.
-  // Silent fallback — startup never blocks on this.
-  void fetchRootLlmsTxt(fetchFn);
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: listMcpTools(),

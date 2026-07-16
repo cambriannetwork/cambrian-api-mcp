@@ -6,7 +6,7 @@ Production MCP access to Cambrian API data across Solana, Base/EVM, Deep42 socia
 
 ## Key Features
 
-- 79 MCP tools: 74 generated API endpoint tools, 4 composite workflow tools, and `cambrian_docs`
+- 75 MCP tools: 70 generated public API endpoint tools, 4 composite workflow tools, and `cambrian_docs`
 - Multi-chain DeFi coverage across Solana and Base/EVM endpoints
 - Deep42 social intelligence and Cambrian risk analysis tools
 - Live docs lookup through `https://docs.cambrian.org/llms.txt`
@@ -46,7 +46,7 @@ claude mcp add --transport http cambrian-api \
 ```text
 "What's the current price of SOL?"
 "Show me the token snapshot for this Solana mint."
-"Find Base chains and supported pool endpoints."
+"Find Base DEXes and supported pool endpoints."
 ```
 
 ### Research social intelligence and risk
@@ -67,13 +67,13 @@ claude mcp add --transport http cambrian-api \
 
 ### Base/EVM
 
-- Chain discovery
+- DEX discovery
 - Uniswap V2/V3, SushiSwap, and Aerodrome pool data
 - Base endpoints exposed with `cambrian_base_*` tool names
 
 ### Deep42
 
-- Social data, project metadata, and intelligence endpoints
+- Public social-data intelligence endpoints
 
 ### Risk
 
