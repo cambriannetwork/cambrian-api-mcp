@@ -191,7 +191,7 @@ async function runHttp(options: CliOptions): Promise<void> {
       status: 'healthy',
       server: SERVER_NAME,
       version: SERVER_VERSION,
-      authMode: 'byok',
+      authMode: 'api-key',
       toolCount: listMcpTools().length,
       transport: 'streamable-http',
     });

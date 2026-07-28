@@ -156,12 +156,10 @@ Currently available, as examples of the pattern:
 
 | Tool | Arguments | What it returns |
 | --- | --- | --- |
-| `cambrian_resolve_token` | `token_address` | token details + current price + pool list |
-| `cambrian_solana_token_snapshot` | `token_address`, optional `token_symbol` | token details, current price, price-volume windows, top holders, pools, and Deep42 social data |
+| `cambrian_solana_token_snapshot` | `token_address`, optional `token_symbol` | token details, current price, 1h/4h/24h price-volume, top holders, pools, and Deep42 social data |
 | `cambrian_health` | none | up/down and latency per service (Solana, Base, Deep42, Risk) |
-| `cambrian_usage` | none | rate-limit `limit`/`remaining`/`resetAt`, where the service publishes them — currently Deep42 only |
 
-Start a "tell me about this Solana token" prompt with `cambrian_solana_token_snapshot`, not six separate reads.
+Start a "tell me about this Solana token" prompt with `cambrian_solana_token_snapshot`, not six separate reads. Pass `token_symbol` whenever you know the ticker: with it, the Deep42 section is scoped to that token, and without it the section falls back to market-wide sentiment. The result labels which one you got under `deep42.scope`.
 
 Because partial failure does not fail the call, always check each section before treating a composite result as complete. A section carrying an `error` object returned no data — say so in the answer, or re-fetch that one piece with its dedicated endpoint tool. Never present a partial snapshot as a full one.
 
@@ -185,7 +183,7 @@ Failures come back as a structured object, never as a raw HTML error page:
 | `AUTH_FORBIDDEN` | 403 | Key lacks access to that service. Do not retry. |
 | `BAD_REQUEST` | 400/422 | Fix the arguments — call `cambrian_docs` for the correct parameter shape. |
 | `NOT_FOUND` | 404 | Address or resource does not exist. Verify the address; do not substitute another. |
-| `RATE_LIMITED` | 429 | Retryable. Back off, then retry. On Deep42, `cambrian_usage` shows the reset time. |
+| `RATE_LIMITED` | 429 | Retryable. Back off, then retry. |
 | `TIMEOUT` | 408 | Retryable. Narrow the query and retry. |
 | `UPSTREAM_ERROR` | 5xx | Retryable. Check `cambrian_health` before retrying. |
 | `MCP_ERROR` | 0 | Client-side or transport failure. Check config and key. |

@@ -6,7 +6,7 @@ Production MCP access to Cambrian API data across Solana, Base/EVM, Deep42 socia
 
 ## Key Features
 
-- 75 MCP tools: 70 generated public API endpoint tools, 4 composite workflow tools, and `cambrian_docs`
+- One generated tool per public Cambrian API endpoint, plus composite workflow tools and `cambrian_docs`
 - Multi-chain DeFi coverage across Solana and Base/EVM endpoints
 - Deep42 social intelligence and Cambrian risk analysis tools
 - Live docs lookup through `https://docs.cambrian.org/llms.txt`

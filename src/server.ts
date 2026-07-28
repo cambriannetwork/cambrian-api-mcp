@@ -39,7 +39,6 @@ export const MAX_RESPONSE_LENGTH_CAP = 100000;
 // async/cached fix requires an upstream risk.cambrian.network job/poll API
 // (not yet available).
 export const RISK_TOOL_TIMEOUT_MS = 40000;
-const RISK_TOOL = CAMBRIAN_MCP_TOOLS.find((tool) => tool.name === 'cambrian_risk_perp_risk_engine')!;
 
 export const LLMS_BASE = 'https://docs.cambrian.org';
 /** Base URL for docs (alias for test imports). */
@@ -206,33 +205,24 @@ export function listMcpTools() {
     })),
     // WS3: composite tools
     {
-      name: 'cambrian_resolve_token',
-      description:
-        'Resolve a Solana token by address: concurrently fetches token details, ' +
-        'current price, and pool list. Tolerates partial failures — each section ' +
-        'independently reports an error if unavailable. Returns retrievedAt timestamp. ' +
-        `Call \`${DOCS_TOOL_NAME}\` with path="solana/token-details" for field meanings.`,
-      inputSchema: {
-        type: 'object',
-        required: ['token_address'],
-        properties: {
-          token_address: { type: 'string', description: 'Solana token mint address.' },
-        },
-      },
-    },
-    {
       name: 'cambrian_solana_token_snapshot',
       description:
         'Full Solana token snapshot: concurrently fetches token details, current price, ' +
-        '24 h/7 d/30 d price-volume, top holders, pool list, and Deep42 ' +
-        'sentiment shifts. Tolerates partial failures. Returns retrievedAt timestamp. ' +
+        '1 h/4 h/24 h price-volume, top holders, pool list, and Deep42 social data. ' +
+        'Tolerates partial failures. Returns retrievedAt timestamp. ' +
         `Call \`${DOCS_TOOL_NAME}\` with path="solana" for full field docs.`,
       inputSchema: {
         type: 'object',
         required: ['token_address'],
         properties: {
           token_address: { type: 'string', description: 'Solana token mint address.' },
-          token_symbol: { type: 'string', description: 'Optional token ticker/symbol included in the snapshot result.' },
+          token_symbol: {
+            type: 'string',
+            description:
+              'Optional token ticker/symbol. When supplied, the Deep42 section is token-scoped ' +
+              '(token-analysis); otherwise it falls back to market-wide sentiment shifts. ' +
+              'The result labels which under deep42.scope.',
+          },
         },
       },
     },
@@ -247,17 +237,9 @@ export function listMcpTools() {
         properties: {},
       },
     },
-    {
-      name: 'cambrian_usage',
-      description:
-        'Fetch current rate-limit/quota status across Cambrian API services. ' +
-        'Concurrently probes a lightweight endpoint on each service and returns ' +
-        'rate-limit headers (limit, remaining, resetAt) per service. Returns retrievedAt timestamp.',
-      inputSchema: {
-        type: 'object',
-        properties: {},
-      },
-    },
+    // `cambrian_usage` was removed: only Deep42 emits x-ratelimit-* headers.
+    // Opabinia (Solana/Base) and Risk emit none, so the tool reported `null`
+    // for three of four services while spending four API calls to do it.
   ];
 }
 
@@ -709,56 +691,47 @@ async function trySection<T>(
   }
 }
 
-export async function callResolveToken(
-  client: CambrianData,
-  tokenAddress: string,
-  retrievedAt: string,
-): Promise<unknown> {
-  const [details, price, pools] = await Promise.all([
-    trySection('token-details', () =>
-      client.opabinia.query('/api/v1/solana/token-details', { token_address: tokenAddress })
-    ),
-    trySection('price-current', () =>
-      client.opabinia.query('/api/v1/solana/price-current', { token_address: tokenAddress })
-    ),
-    trySection('token-pool-search', () =>
-      client.opabinia.query('/api/v1/solana/token-pool-search', { token_address: tokenAddress })
-    ),
-  ]);
-  return { tokenAddress, retrievedAt, details, price, pools };
-}
-
 export async function callSolanaTokenSnapshot(
   client: CambrianData,
   tokenAddress: string,
   tokenSymbol: string | undefined,
   retrievedAt: string,
 ): Promise<unknown> {
-  const [details, price, pv24h, pv7d, pv30d, holders, pools, sentiment] = await Promise.all([
+  // price-volume/single only accepts the intraday enum 1h|2h|4h|8h|24h. Asking
+  // for "7d"/"30d" is a 400, so the multi-day windows are not available here.
+  const [details, price, pv1h, pv4h, pv24h, holders, pools, social] = await Promise.all([
     trySection('token-details', () =>
       client.opabinia.query('/api/v1/solana/token-details', { token_address: tokenAddress })
     ),
     trySection('price-current', () =>
       client.opabinia.query('/api/v1/solana/price-current', { token_address: tokenAddress })
     ),
+    trySection('price-volume-1h', () =>
+      client.opabinia.query('/api/v1/solana/price-volume/single', { token_address: tokenAddress, timeframe: '1h' })
+    ),
+    trySection('price-volume-4h', () =>
+      client.opabinia.query('/api/v1/solana/price-volume/single', { token_address: tokenAddress, timeframe: '4h' })
+    ),
     trySection('price-volume-24h', () =>
       client.opabinia.query('/api/v1/solana/price-volume/single', { token_address: tokenAddress, timeframe: '24h' })
     ),
-    trySection('price-volume-7d', () =>
-      client.opabinia.query('/api/v1/solana/price-volume/single', { token_address: tokenAddress, timeframe: '7d' })
-    ),
-    trySection('price-volume-30d', () =>
-      client.opabinia.query('/api/v1/solana/price-volume/single', { token_address: tokenAddress, timeframe: '30d' })
-    ),
+    // The holders endpoint keys on `program_id` (the mint address), not
+    // `token_address`. Passing `token_address` is a 400.
     trySection('token-holders', () =>
-      client.opabinia.query('/api/v1/solana/tokens/holders', { token_address: tokenAddress, limit: 20 })
+      client.opabinia.query('/api/v1/solana/tokens/holders', { program_id: tokenAddress, limit: 20 })
     ),
     trySection('token-pool-search', () =>
       client.opabinia.query('/api/v1/solana/token-pool-search', { token_address: tokenAddress })
     ),
-    trySection('deep42-sentiment-shifts', () =>
-      client.deep42.query('/api/v1/deep42/social-data/sentiment-shifts', {})
-    ),
+    // sentiment-shifts has no token filter, so it is market-wide. Only
+    // token-analysis is token-scoped, and it keys on the ticker.
+    tokenSymbol
+      ? trySection('deep42-token-analysis', () =>
+          client.deep42.query('/api/v1/deep42/social-data/token-analysis', { token_symbol: tokenSymbol })
+        )
+      : trySection('deep42-sentiment-shifts', () =>
+          client.deep42.query('/api/v1/deep42/social-data/sentiment-shifts', {})
+        ),
   ]);
   return {
     tokenAddress,
@@ -766,10 +739,12 @@ export async function callSolanaTokenSnapshot(
     retrievedAt,
     details,
     price,
-    priceVolume: { h24: pv24h, d7: pv7d, d30: pv30d },
+    priceVolume: { h1: pv1h, h4: pv4h, h24: pv24h },
     holders,
     pools,
-    deep42: { sentimentShifts: sentiment },
+    deep42: tokenSymbol
+      ? { scope: 'token', tokenAnalysis: social }
+      : { scope: 'market-wide', sentimentShifts: social },
   };
 }
 
@@ -796,11 +771,10 @@ export async function callCambrianHealth(
     probe('solana', () => client.opabinia.query('/api/v1/solana/latest-block', {})),
     probe('base', () => client.opabinia.query('/api/v1/evm/dexes', {})),
     probe('deep42', () => client.deep42.query('/api/v1/deep42/social-data/sentiment-shifts', {})),
-    probe('risk', () => withTimeout(
-      callCambrianTool(client, RISK_TOOL, {}),
-      RISK_TOOL_TIMEOUT_MS,
-      RISK_TOOL.name,
-    )),
+    // Probe the risk service's own /health, NOT perp-risk-engine. The engine
+    // runs Monte Carlo simulations (~14 s observed), and Promise.all makes the
+    // whole health check as slow as its slowest probe.
+    probe('risk', () => client.risk.query('/health', {})),
   ]);
 
   const services = [solana, base, deep42, risk] as Array<{
@@ -811,38 +785,6 @@ export async function callCambrianHealth(
   }>;
   const allUp = services.every((s) => s.status === 'up');
   return { status: allUp ? 'healthy' : 'degraded', services, retrievedAt };
-}
-
-export async function callCambrianUsage(
-  client: CambrianData,
-  retrievedAt: string,
-): Promise<unknown> {
-  // Probe each service and surface the _rateLimit metadata from the response.
-  async function probeUsage(label: string, fn: () => Promise<unknown>) {
-    try {
-      const result = await fn();
-      const rateLimit =
-        typeof result === 'object' && result !== null && '_rateLimit' in result
-          ? (result as Record<string, unknown>)['_rateLimit']
-          : null;
-      return { service: label, status: 'ok', rateLimit };
-    } catch (err) {
-      return { service: label, status: 'error', error: toStructuredError(err), rateLimit: null };
-    }
-  }
-
-  const [solana, base, deep42, risk] = await Promise.all([
-    probeUsage('solana', () => client.opabinia.query('/api/v1/solana/latest-block', {})),
-    probeUsage('base', () => client.opabinia.query('/api/v1/evm/dexes', {})),
-    probeUsage('deep42', () => client.deep42.query('/api/v1/deep42/social-data/sentiment-shifts', {})),
-    probeUsage('risk', () => withTimeout(
-      callCambrianTool(client, RISK_TOOL, {}),
-      RISK_TOOL_TIMEOUT_MS,
-      RISK_TOOL.name,
-    )),
-  ]);
-
-  return { retrievedAt, services: [solana, base, deep42, risk] };
 }
 
 // ---------------------------------------------------------------------------
@@ -924,13 +866,6 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
       }
 
       // WS3: composite tools
-      if (name === 'cambrian_resolve_token') {
-        const tokenAddress = typeof args.token_address === 'string' ? args.token_address : '';
-        if (!tokenAddress) throw new Error('Missing required parameter: token_address');
-        const result = await callResolveToken(client, tokenAddress, retrievedAt);
-        return buildToolResult(result, maxLength, retrievedAt);
-      }
-
       if (name === 'cambrian_solana_token_snapshot') {
         const tokenAddress = typeof args.token_address === 'string' ? args.token_address : '';
         if (!tokenAddress) throw new Error('Missing required parameter: token_address');
@@ -941,11 +876,6 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
 
       if (name === 'cambrian_health') {
         const result = await callCambrianHealth(client, retrievedAt);
-        return buildToolResult(result, maxLength, retrievedAt);
-      }
-
-      if (name === 'cambrian_usage') {
-        const result = await callCambrianUsage(client, retrievedAt);
         return buildToolResult(result, maxLength, retrievedAt);
       }
 
