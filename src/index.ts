@@ -202,7 +202,7 @@ async function runHttp(options: CliOptions): Promise<void> {
       service: SERVER_NAME,
       version: SERVER_VERSION,
       mcpEndpoint: '/mcp',
-      auth: 'BYOK via Authorization: Bearer <key> or X-Cambrian-Api-Key',
+      auth: 'Cambrian API key via Authorization: Bearer <key> or X-Cambrian-Api-Key',
       toolCount: listMcpTools().length,
     });
   });
