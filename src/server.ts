@@ -247,17 +247,9 @@ export function listMcpTools() {
         properties: {},
       },
     },
-    {
-      name: 'cambrian_usage',
-      description:
-        'Fetch current rate-limit/quota status across Cambrian API services. ' +
-        'Concurrently probes a lightweight endpoint on each service and returns ' +
-        'rate-limit headers (limit, remaining, resetAt) per service. Returns retrievedAt timestamp.',
-      inputSchema: {
-        type: 'object',
-        properties: {},
-      },
-    },
+    // `cambrian_usage` was removed: only Deep42 emits x-ratelimit-* headers.
+    // Opabinia (Solana/Base) and Risk emit none, so the tool reported `null`
+    // for three of four services while spending four API calls to do it.
   ];
 }
 
@@ -734,31 +726,41 @@ export async function callSolanaTokenSnapshot(
   tokenSymbol: string | undefined,
   retrievedAt: string,
 ): Promise<unknown> {
-  const [details, price, pv24h, pv7d, pv30d, holders, pools, sentiment] = await Promise.all([
+  // price-volume/single only accepts the intraday enum 1h|2h|4h|8h|24h. Asking
+  // for "7d"/"30d" is a 400, so the multi-day windows are not available here.
+  const [details, price, pv1h, pv4h, pv24h, holders, pools, social] = await Promise.all([
     trySection('token-details', () =>
       client.opabinia.query('/api/v1/solana/token-details', { token_address: tokenAddress })
     ),
     trySection('price-current', () =>
       client.opabinia.query('/api/v1/solana/price-current', { token_address: tokenAddress })
     ),
+    trySection('price-volume-1h', () =>
+      client.opabinia.query('/api/v1/solana/price-volume/single', { token_address: tokenAddress, timeframe: '1h' })
+    ),
+    trySection('price-volume-4h', () =>
+      client.opabinia.query('/api/v1/solana/price-volume/single', { token_address: tokenAddress, timeframe: '4h' })
+    ),
     trySection('price-volume-24h', () =>
       client.opabinia.query('/api/v1/solana/price-volume/single', { token_address: tokenAddress, timeframe: '24h' })
     ),
-    trySection('price-volume-7d', () =>
-      client.opabinia.query('/api/v1/solana/price-volume/single', { token_address: tokenAddress, timeframe: '7d' })
-    ),
-    trySection('price-volume-30d', () =>
-      client.opabinia.query('/api/v1/solana/price-volume/single', { token_address: tokenAddress, timeframe: '30d' })
-    ),
+    // The holders endpoint keys on `program_id` (the mint address), not
+    // `token_address`. Passing `token_address` is a 400.
     trySection('token-holders', () =>
-      client.opabinia.query('/api/v1/solana/tokens/holders', { token_address: tokenAddress, limit: 20 })
+      client.opabinia.query('/api/v1/solana/tokens/holders', { program_id: tokenAddress, limit: 20 })
     ),
     trySection('token-pool-search', () =>
       client.opabinia.query('/api/v1/solana/token-pool-search', { token_address: tokenAddress })
     ),
-    trySection('deep42-sentiment-shifts', () =>
-      client.deep42.query('/api/v1/deep42/social-data/sentiment-shifts', {})
-    ),
+    // sentiment-shifts has no token filter, so it is market-wide. Only
+    // token-analysis is token-scoped, and it keys on the ticker.
+    tokenSymbol
+      ? trySection('deep42-token-analysis', () =>
+          client.deep42.query('/api/v1/deep42/social-data/token-analysis', { token_symbol: tokenSymbol })
+        )
+      : trySection('deep42-sentiment-shifts', () =>
+          client.deep42.query('/api/v1/deep42/social-data/sentiment-shifts', {})
+        ),
   ]);
   return {
     tokenAddress,
@@ -766,10 +768,12 @@ export async function callSolanaTokenSnapshot(
     retrievedAt,
     details,
     price,
-    priceVolume: { h24: pv24h, d7: pv7d, d30: pv30d },
+    priceVolume: { h1: pv1h, h4: pv4h, h24: pv24h },
     holders,
     pools,
-    deep42: { sentimentShifts: sentiment },
+    deep42: tokenSymbol
+      ? { scope: 'token', tokenAnalysis: social }
+      : { scope: 'market-wide', sentimentShifts: social },
   };
 }
 
@@ -796,11 +800,10 @@ export async function callCambrianHealth(
     probe('solana', () => client.opabinia.query('/api/v1/solana/latest-block', {})),
     probe('base', () => client.opabinia.query('/api/v1/evm/dexes', {})),
     probe('deep42', () => client.deep42.query('/api/v1/deep42/social-data/sentiment-shifts', {})),
-    probe('risk', () => withTimeout(
-      callCambrianTool(client, RISK_TOOL, {}),
-      RISK_TOOL_TIMEOUT_MS,
-      RISK_TOOL.name,
-    )),
+    // Probe the risk service's own /health, NOT perp-risk-engine. The engine
+    // runs Monte Carlo simulations (~14 s observed), and Promise.all makes the
+    // whole health check as slow as its slowest probe.
+    probe('risk', () => client.risk.query('/health', {})),
   ]);
 
   const services = [solana, base, deep42, risk] as Array<{
@@ -811,38 +814,6 @@ export async function callCambrianHealth(
   }>;
   const allUp = services.every((s) => s.status === 'up');
   return { status: allUp ? 'healthy' : 'degraded', services, retrievedAt };
-}
-
-export async function callCambrianUsage(
-  client: CambrianData,
-  retrievedAt: string,
-): Promise<unknown> {
-  // Probe each service and surface the _rateLimit metadata from the response.
-  async function probeUsage(label: string, fn: () => Promise<unknown>) {
-    try {
-      const result = await fn();
-      const rateLimit =
-        typeof result === 'object' && result !== null && '_rateLimit' in result
-          ? (result as Record<string, unknown>)['_rateLimit']
-          : null;
-      return { service: label, status: 'ok', rateLimit };
-    } catch (err) {
-      return { service: label, status: 'error', error: toStructuredError(err), rateLimit: null };
-    }
-  }
-
-  const [solana, base, deep42, risk] = await Promise.all([
-    probeUsage('solana', () => client.opabinia.query('/api/v1/solana/latest-block', {})),
-    probeUsage('base', () => client.opabinia.query('/api/v1/evm/dexes', {})),
-    probeUsage('deep42', () => client.deep42.query('/api/v1/deep42/social-data/sentiment-shifts', {})),
-    probeUsage('risk', () => withTimeout(
-      callCambrianTool(client, RISK_TOOL, {}),
-      RISK_TOOL_TIMEOUT_MS,
-      RISK_TOOL.name,
-    )),
-  ]);
-
-  return { retrievedAt, services: [solana, base, deep42, risk] };
 }
 
 // ---------------------------------------------------------------------------
@@ -941,11 +912,6 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
 
       if (name === 'cambrian_health') {
         const result = await callCambrianHealth(client, retrievedAt);
-        return buildToolResult(result, maxLength, retrievedAt);
-      }
-
-      if (name === 'cambrian_usage') {
-        const result = await callCambrianUsage(client, retrievedAt);
         return buildToolResult(result, maxLength, retrievedAt);
       }
 

@@ -15,7 +15,6 @@ import {
   buildToolResult,
   callCambrianHealth,
   callCambrianTool,
-  callCambrianUsage,
   callResolveToken,
   callSolanaTokenSnapshot,
   createCambrianMcpServer,
@@ -54,7 +53,7 @@ describe('Cambrian MCP tools', () => {
 
   it('lists canonical tools and docs tool', () => {
     const tools = listMcpTools();
-    expect(tools).toHaveLength(75);
+    expect(tools).toHaveLength(74);
     expect(tools.some((tool) => tool.name === DOCS_TOOL_NAME)).toBe(true);
     expect(tools.some((tool) => tool.name === 'cambrian_base_chains')).toBe(false);
     expect(tools.some((tool) => tool.name === 'cambrian_base_dexes')).toBe(true);
@@ -552,12 +551,10 @@ describe('callCambrianHealth', () => {
     expect(services.every((s) => s.status === 'up')).toBe(true);
     expect(calls.some((call) => call.apiPath === '/api/v1/evm/dexes')).toBe(true);
     expect(calls.some((call) => call.apiPath === '/api/v1/evm/chains')).toBe(false);
-    expect(calls.find((call) => call.client === 'risk')?.params).toMatchObject({
-      entry_price: expect.any(Number),
-      leverage: expect.any(Number),
-      direction: expect.any(String),
-      risk_horizon: expect.any(String),
-    });
+    // The risk probe is the service's own /health, not perp-risk-engine:
+    // the Monte Carlo engine took ~14 s and Promise.all made the whole health
+    // check that slow.
+    expect(calls.find((call) => call.client === 'risk')?.apiPath).toBe('/health');
   });
 
   it('reports degraded when a service is down, without throwing', async () => {
@@ -571,40 +568,14 @@ describe('callCambrianHealth', () => {
   });
 });
 
-describe('callCambrianUsage', () => {
-  beforeEach(() => resetCalls());
-
-  it('returns rate-limit info per service', async () => {
-    const client = new CambrianData({ apiKey: 'test' });
-    const result = await callCambrianUsage(client, '2026-01-01T00:00:00.000Z') as Record<string, unknown>;
-    expect(result.retrievedAt).toBe('2026-01-01T00:00:00.000Z');
-    expect(Array.isArray(result.services)).toBe(true);
-    expect(calls.find((call) => call.client === 'risk')?.params).toMatchObject({
-      entry_price: expect.any(Number),
-      leverage: expect.any(Number),
-      direction: expect.any(String),
-      risk_horizon: expect.any(String),
-    });
-  });
-
-  it('reports error per service without throwing on failure', async () => {
-    const client = new CambrianData({ apiKey: 'test' });
-    client.risk.query = async () => { throw new Error('risk down'); };
-    const result = await callCambrianUsage(client, '2026-01-01T00:00:00.000Z') as Record<string, unknown>;
-    const services = result.services as Array<{ service: string; status: string }>;
-    const risk = services.find((s) => s.service === 'risk');
-    expect(risk?.status).toBe('error');
-  });
-});
-
 describe('composite tools listed in listMcpTools', () => {
-  it('includes cambrian_resolve_token, cambrian_solana_token_snapshot, cambrian_health, cambrian_usage', () => {
+  it('includes cambrian_resolve_token, cambrian_solana_token_snapshot, cambrian_health', () => {
     const tools = listMcpTools();
     const names = tools.map((t) => t.name);
     expect(names).toContain('cambrian_resolve_token');
     expect(names).toContain('cambrian_solana_token_snapshot');
     expect(names).toContain('cambrian_health');
-    expect(names).toContain('cambrian_usage');
+    expect(names).not.toContain('cambrian_usage');
   });
 
   it('cambrian_resolve_token requires token_address', () => {
@@ -645,5 +616,55 @@ describe('withTimeout', () => {
     // Should reject before advancing timers.
     await expect(withTimeout(boom, 30000, 'test')).rejects.toThrow('real error');
     vi.useRealTimers();
+  });
+});
+
+describe('composite tools send parameters their endpoints actually accept', () => {
+  beforeEach(() => resetCalls());
+
+  /**
+   * Composites call `client.<service>.query()` directly, bypassing the
+   * metadata validation every generated tool goes through. That is how the
+   * snapshot shipped with `token_address` on an endpoint keyed by `program_id`
+   * and with `7d`/`30d` on an enum that only accepts 1h|2h|4h|8h|24h — both
+   * 400s, silently swallowed by per-section error tolerance.
+   *
+   * Replay every recorded call through validateAndBuildParams so any future
+   * drift fails here instead of degrading a section in production.
+   */
+  function assertRecordedCallsValidate() {
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) {
+      const tool = CAMBRIAN_MCP_TOOLS.find((candidate) => candidate.apiPath === call.apiPath);
+      if (!tool) continue; // non-endpoint probes such as risk /health
+      expect(() => validateAndBuildParams(tool, call.params)).not.toThrow();
+    }
+  }
+
+  it('cambrian_resolve_token', async () => {
+    await callResolveToken(new CambrianData(), 'So11111111111111111111111111111111111111112', 'x');
+    assertRecordedCallsValidate();
+  });
+
+  it('cambrian_solana_token_snapshot without a symbol', async () => {
+    await callSolanaTokenSnapshot(new CambrianData(), 'So11111111111111111111111111111111111111112', undefined, 'x');
+    assertRecordedCallsValidate();
+  });
+
+  it('cambrian_solana_token_snapshot with a symbol', async () => {
+    await callSolanaTokenSnapshot(new CambrianData(), 'So11111111111111111111111111111111111111112', 'SOL', 'x');
+    assertRecordedCallsValidate();
+  });
+
+  it('cambrian_health', async () => {
+    await callCambrianHealth(new CambrianData(), 'x');
+    assertRecordedCallsValidate();
+  });
+
+  it('cambrian_health probes risk /health, never the Monte Carlo engine', async () => {
+    await callCambrianHealth(new CambrianData(), 'x');
+    const riskCalls = calls.filter((call) => call.client === 'risk');
+    expect(riskCalls).toHaveLength(1);
+    expect(riskCalls[0].apiPath).toBe('/health');
   });
 });
