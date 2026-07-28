@@ -44,7 +44,7 @@ jobs:
           head -n 1 dist/index.js | grep '#!/usr/bin/env node'
           test -x dist/index.js
           node dist/index.js --version
-          node --input-type=module -e "const m = await import('./dist/server.js'); const names = m.listMcpTools().map((tool) => tool.name); if (names.length !== 75) throw new Error('Expected 75 public tools'); if (!names.includes('cambrian_docs') || !names.includes('cambrian_base_dexes') || names.includes('cambrian_base_chains')) throw new Error('Unexpected public tool inventory');"
+          node --input-type=module -e "const m = await import('./dist/server.js'); const names = m.listMcpTools().map((tool) => tool.name); if (names.length !== 73) throw new Error('Expected 73 public tools'); if (!names.includes('cambrian_docs') || !names.includes('cambrian_base_dexes') || names.includes('cambrian_base_chains')) throw new Error('Unexpected public tool inventory');"
 
       - name: Verify package contents
         run: npm pack --dry-run
