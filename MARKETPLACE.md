@@ -10,7 +10,7 @@ Production MCP access to Cambrian API data across Solana, Base/EVM, Deep42 socia
 - Multi-chain DeFi coverage across Solana and Base/EVM endpoints
 - Deep42 social intelligence and Cambrian risk analysis tools
 - Live docs lookup through `https://docs.cambrian.org/llms.txt`
-- BYOK authentication with `Authorization: Bearer <CAMBRIAN_API_KEY>` or `X-Cambrian-Api-Key`
+- Caller-supplied Cambrian API key via `Authorization: Bearer <CAMBRIAN_API_KEY>` or `X-Cambrian-Api-Key`
 - Local stdio and hosted Streamable HTTP transports
 
 ## Installation

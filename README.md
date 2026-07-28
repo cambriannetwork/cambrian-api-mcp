@@ -2,15 +2,21 @@
 
 Model Context Protocol server for the Cambrian API. It exposes the same product surface as the `cambrian` CLI for agents that need live DeFi, social intelligence, risk, and API documentation tools.
 
-Authentication is BYOK only. The hosted server and local package both require the caller to provide a Cambrian API key; the server never ships or proxies a shared key.
+Every call needs a Cambrian API key supplied by the caller. The hosted server and local package both require one; the server never ships or proxies a shared key.
 
 ## What You Get
 
-- 70 generated public endpoint tools from Cambrian API metadata
-- 4 composite workflow tools for token snapshots, token resolution, API health, and usage probes
+- one generated tool per public Cambrian API endpoint, built from Cambrian API metadata
+- composite workflow tools for token snapshots, token resolution, API health, and usage probes
 - `cambrian_docs` for live docs from `https://docs.cambrian.org/llms.txt`
 - stdio transport for local MCP clients
 - Streamable HTTP transport for hosted and self-hosted deployments
+
+## Agent Skill
+
+New users and agent runtimes should start here: [skills/cambrian-mcp/SKILL.md](skills/cambrian-mcp/SKILL.md). It covers Cambrian API key auth, hosted and local client config, tool naming, `cambrian_docs` lookup, composite tools, response limits, and error handling in one document.
+
+For the CLI instead of MCP, see the [`cambrian` CLI skill](https://github.com/cambriannetwork/cambrian-cli/blob/main/skills/cambrian/SKILL.md).
 
 ## Recommended Setup Through The CLI
 
