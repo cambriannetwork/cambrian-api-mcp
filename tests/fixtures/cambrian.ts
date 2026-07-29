@@ -24,10 +24,20 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * When set, opabinia.query never settles, so tests can exercise the server's
+ * per-tool timeout bound without waiting on a real 45 s clock.
+ */
+let hangOpabinia = false;
+export function setHangOpabinia(value: boolean): void {
+  hangOpabinia = value;
+}
+
 export class CambrianData {
   opabinia = {
     query: async (apiPath: string, params: Record<string, unknown> = {}) => {
       calls.push({ client: 'opabinia', apiPath, params });
+      if (hangOpabinia) return new Promise<never>(() => {});
       if (apiPath === '/api/v1/solana/latest-block') {
         return [{
           columns: [{ name: 'blockNumber', type: 'UInt64' }],
@@ -56,4 +66,5 @@ export class CambrianData {
 
 export function resetCalls(): void {
   calls.length = 0;
+  hangOpabinia = false;
 }

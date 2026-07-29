@@ -40,6 +40,14 @@ export const MAX_RESPONSE_LENGTH_CAP = 100000;
 // (not yet available).
 export const RISK_TOOL_TIMEOUT_MS = 40000;
 
+// Every other tool is bounded too. Measured against production, the slowest
+// endpoints run 13-25 s serially and inflate ~4x under concurrent load, and
+// unbounded ones (solana/orca/pools returns 157k rows with no default limit)
+// hang until the CLIENT gives up around 60 s and reports a bare MCP -32001.
+// 45 s lands under that, so callers get a structured retryable TIMEOUT with a
+// hint instead of a protocol error they cannot act on.
+export const DEFAULT_TOOL_TIMEOUT_MS = 45000;
+
 export const LLMS_BASE = 'https://docs.cambrian.org';
 /** Base URL for docs (alias for test imports). */
 export const DOCS_BASE_URL = LLMS_BASE;
@@ -573,8 +581,32 @@ export interface StructuredTableResult {
   records: Record<string, unknown>[];
   schema: Array<{ name: string; type: string }>;
   rowCount: number;
+  /** Records actually returned, present only when `records` was capped. */
+  returnedRecordCount?: number;
+  /** True when `records` holds fewer rows than `rowCount`. */
+  truncated?: boolean;
   retrievedAt: string;
   rateLimit?: { limit: number | null; remaining: number | null; resetAt: string | null } | null;
+}
+
+// `_maxResponseLength` bounds the TEXT fallback only; structuredContent was
+// unbounded. Measured: cambrian_solana_orca_pools returns 157k rows (the
+// endpoint has no `limit` parameter at all) and serialized to a 58.8 MB
+// JSON-RPC message that killed the stdio connection outright. Cap the records
+// carried in structuredContent; `rowCount` still reports the true total so a
+// caller can tell it was capped and paginate if the endpoint supports it.
+export const MAX_STRUCTURED_RECORDS = 1000;
+
+function capRecords<T>(records: T[]): { records: T[]; truncated: boolean } {
+  if (records.length <= MAX_STRUCTURED_RECORDS) return { records, truncated: false };
+  return { records: records.slice(0, MAX_STRUCTURED_RECORDS), truncated: true };
+}
+
+/** Cap `records` in place on a structured table, tagging it when capped. */
+function capStructuredTable(structured: StructuredTableResult): StructuredTableResult {
+  const { records, truncated } = capRecords(structured.records);
+  if (!truncated) return structured;
+  return { ...structured, records, returnedRecordCount: records.length, truncated: true };
 }
 
 /**
@@ -638,18 +670,26 @@ export function buildToolResult(
     );
     return {
       content: [{ type: 'text', text: compactText }],
-      structuredContent: { ...structured },
+      structuredContent: { ...capStructuredTable(structured) },
     };
   }
 
   if (Array.isArray(result)) {
     const structuredContent = result.length > 0 && result.every(isTableResponse)
       ? {
-          tables: result.map((table) => tableResponseToStructured(table, retrievedAt)),
+          tables: result.map((table) => capStructuredTable(tableResponseToStructured(table, retrievedAt))),
           tableCount: result.length,
           retrievedAt,
         }
-      : { items: result, itemCount: result.length, retrievedAt };
+      : (() => {
+          const { records, truncated } = capRecords(result);
+          return {
+            items: records,
+            itemCount: result.length,
+            ...(truncated ? { returnedItemCount: records.length, truncated: true } : {}),
+            retrievedAt,
+          };
+        })();
     return {
       content: [{ type: 'text', text: truncateText(JSON.stringify(structuredContent, null, 2), maxLength) }],
       structuredContent,
@@ -802,13 +842,16 @@ interface SyntheticTimeoutError extends Error {
  * Race a Promise against a timeout. On timeout, throws a SyntheticTimeoutError
  * that toTimeoutError() converts to a TIMEOUT/retryable structured error.
  */
-export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+export function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+  hint = 'Retry, or narrow the request — pass a smaller "limit" or a tighter time range.',
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       const err = new Error(
-        `${label} timed out after ${ms} ms. ` +
-        'The perp-risk-engine runs Monte Carlo simulations — ' +
-        'try a shorter risk_horizon (e.g. "1h" instead of "1w" or "1mo") for faster results.',
+        `${label} timed out after ${ms} ms. ${hint}`,
       ) as SyntheticTimeoutError;
       err[SYNTHETIC_TIMEOUT] = true;
       reject(err);
@@ -841,6 +884,10 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
   const client = new CambrianData({
     apiKey: options.apiKey,
     fetch: fetchFn,
+    // Aborts the underlying request instead of only losing the withTimeout
+    // race, so an abandoned call stops holding a socket. The client's own
+    // 90 s default outlived every bound below it.
+    timeoutMs: DEFAULT_TOOL_TIMEOUT_MS,
   });
   const server = new Server(
     { name: SERVER_NAME, version: SERVER_VERSION },
@@ -870,24 +917,42 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
         const tokenAddress = typeof args.token_address === 'string' ? args.token_address : '';
         if (!tokenAddress) throw new Error('Missing required parameter: token_address');
         const tokenSymbol = typeof args.token_symbol === 'string' ? args.token_symbol : undefined;
-        const result = await callSolanaTokenSnapshot(client, tokenAddress, tokenSymbol, retrievedAt);
+        const result = await withTimeout(
+          callSolanaTokenSnapshot(client, tokenAddress, tokenSymbol, retrievedAt),
+          DEFAULT_TOOL_TIMEOUT_MS,
+          name,
+        );
         return buildToolResult(result, maxLength, retrievedAt);
       }
 
       if (name === 'cambrian_health') {
-        const result = await callCambrianHealth(client, retrievedAt);
+        const result = await withTimeout(
+          callCambrianHealth(client, retrievedAt),
+          DEFAULT_TOOL_TIMEOUT_MS,
+          name,
+        );
         return buildToolResult(result, maxLength, retrievedAt);
       }
 
       const tool = CAMBRIAN_MCP_TOOLS.find((candidate) => candidate.name === name);
       if (!tool) throw new Error(`Unknown tool: ${name}`);
 
-      // WS5: bounded timeout for the risk tool.
-      const callPromise = callCambrianTool(client, tool, args);
+      // Every tool is bounded: risk keeps its shorter, Monte-Carlo-specific
+      // budget; the rest fall back to DEFAULT_TOOL_TIMEOUT_MS.
       const result =
         tool.group === 'risk'
-          ? await withTimeout(callPromise, RISK_TOOL_TIMEOUT_MS, 'cambrian_risk_perp_risk_engine')
-          : await callPromise;
+          ? await withTimeout(
+              callCambrianTool(client, tool, args),
+              RISK_TOOL_TIMEOUT_MS,
+              'cambrian_risk_perp_risk_engine',
+              'The perp-risk-engine runs Monte Carlo simulations — ' +
+                'try a shorter risk_horizon (e.g. "1h" instead of "1w" or "1mo") for faster results.',
+            )
+          : await withTimeout(
+              callCambrianTool(client, tool, args),
+              DEFAULT_TOOL_TIMEOUT_MS,
+              name,
+            );
 
       // WS2: structured content
       return buildToolResult(result, maxLength, retrievedAt);

@@ -9,6 +9,33 @@ for those.
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-07-29
+
+### Fixed
+
+- **`structuredContent` is now bounded.** `_maxResponseLength` clamped only the
+  text fallback, so the structured payload was unlimited. Measured against
+  production, `cambrian_solana_orca_pools` returns 137,864 rows — the endpoint
+  has no `limit` parameter at all — and serialized to a **58.8 MB** JSON-RPC
+  message that killed the stdio connection outright, taking every later call in
+  that session with it. That is what the hosted server's `MCP error -32001` and
+  the apparent `cambrian_solana_trending_tokens` failure both were: collateral
+  from one oversized response, not three broken tools. Records are capped at
+  1000 per table; `rowCount` still reports the true upstream total and the
+  payload carries `truncated: true` plus `returnedRecordCount`. Same call now
+  returns 483 KB.
+
+### Changed
+
+- **Every tool is time-bounded, not just risk.** 72 of 73 tools had no timeout,
+  so a slow call hung until the client aborted and surfaced a bare protocol
+  error an agent cannot act on. Non-risk tools now use a 45 s bound and return
+  the same structured retryable `TIMEOUT` the risk tool has always returned.
+  Risk keeps its shorter 40 s budget and its Monte Carlo-specific hint.
+- The underlying Cambrian client is constructed with a matching 45 s
+  `timeoutMs`, so an abandoned request is actually aborted rather than left
+  holding a socket until the client default of 90 s.
+
 ## [1.3.0] - 2026-07-28
 
 ### Breaking

@@ -8,7 +8,9 @@ import {
   DOCS_BASE_URL,
   DOCS_ROOT_URL,
   MAX_RESPONSE_LENGTH_CAP,
+  MAX_STRUCTURED_RECORDS,
   RISK_TOOL_TIMEOUT_MS,
+  DEFAULT_TOOL_TIMEOUT_MS,
   SERVER_VERSION,
   baseServerInstructions,
   buildToolInputSchema,
@@ -28,7 +30,7 @@ import {
   validateAndBuildParams,
   withTimeout,
 } from '../src/server.js';
-import { ApiError, calls, resetCalls } from './fixtures/cambrian.js';
+import { ApiError, calls, resetCalls, setHangOpabinia } from './fixtures/cambrian.js';
 
 // Build a mock fetch that maps exact URLs to {status, body, contentType}.
 function mockFetch(routes: Record<string, { status?: number; body: string; contentType?: string }>): typeof globalThis.fetch {
@@ -465,6 +467,47 @@ describe('buildToolResult', () => {
     expect(result.content[0].text).toBe('raw text');
   });
 
+  // cambrian_solana_orca_pools returns 137k+ rows and has no `limit` param.
+  // Uncapped, that serialized to a 58.8 MB JSON-RPC message that killed the
+  // stdio connection — taking every later call in the session with it.
+  it('caps structuredContent records and reports the true rowCount', () => {
+    const hugeTable = {
+      columns: [{ name: 'poolAddress', type: 'string' }],
+      data: Array.from({ length: MAX_STRUCTURED_RECORDS + 500 }, (_, i) => [`pool-${i}`]),
+      rows: MAX_STRUCTURED_RECORDS + 500,
+    };
+    const structured = buildToolResult(hugeTable, 30000, now).structuredContent as {
+      records: unknown[]; rowCount: number; returnedRecordCount: number; truncated: boolean;
+    };
+    expect(structured.records).toHaveLength(MAX_STRUCTURED_RECORDS);
+    expect(structured.returnedRecordCount).toBe(MAX_STRUCTURED_RECORDS);
+    expect(structured.truncated).toBe(true);
+    // The caller must still learn how much data actually exists upstream.
+    expect(structured.rowCount).toBe(MAX_STRUCTURED_RECORDS + 500);
+  });
+
+  it('leaves a table under the cap untagged', () => {
+    const smallTable = {
+      columns: [{ name: 'blockNumber', type: 'UInt64' }],
+      data: [[123]],
+      rows: 1,
+    };
+    const structured = buildToolResult(smallTable, 30000, now).structuredContent as Record<string, unknown>;
+    expect(structured.truncated).toBeUndefined();
+    expect(structured.returnedRecordCount).toBeUndefined();
+  });
+
+  it('caps a plain (non-table) array response too', () => {
+    const items = Array.from({ length: MAX_STRUCTURED_RECORDS + 10 }, (_, i) => ({ i }));
+    const structured = buildToolResult(items, 30000, now).structuredContent as {
+      items: unknown[]; itemCount: number; returnedItemCount: number; truncated: boolean;
+    };
+    expect(structured.items).toHaveLength(MAX_STRUCTURED_RECORDS);
+    expect(structured.itemCount).toBe(MAX_STRUCTURED_RECORDS + 10);
+    expect(structured.returnedItemCount).toBe(MAX_STRUCTURED_RECORDS);
+    expect(structured.truncated).toBe(true);
+  });
+
   it('truncates the text fallback when it exceeds maxLength', () => {
     const bigTable = {
       columns: [{ name: 'data', type: 'string' }],
@@ -612,6 +655,51 @@ describe('withTimeout', () => {
   it('RISK_TOOL_TIMEOUT_MS is defined as a reasonable positive bound', () => {
     expect(RISK_TOOL_TIMEOUT_MS).toBeGreaterThan(0);
     expect(RISK_TOOL_TIMEOUT_MS).toBeLessThanOrEqual(60000);
+  });
+
+  it('DEFAULT_TOOL_TIMEOUT_MS stays under the ~60 s client-side abort', () => {
+    expect(DEFAULT_TOOL_TIMEOUT_MS).toBeGreaterThan(RISK_TOOL_TIMEOUT_MS);
+    expect(DEFAULT_TOOL_TIMEOUT_MS).toBeLessThan(60000);
+  });
+
+  it('uses a generic hint by default and the supplied one when given', async () => {
+    vi.useFakeTimers();
+    const generic = withTimeout(new Promise<never>(() => {}), 100, 'cambrian_solana_orca_pools');
+    const specific = withTimeout(
+      new Promise<never>(() => {}), 100, 'cambrian_risk_perp_risk_engine', 'Monte Carlo hint.',
+    );
+    vi.advanceTimersByTime(200);
+    await expect(generic).rejects.toThrow(/narrow the request/);
+    await expect(specific).rejects.toThrow(/Monte Carlo hint\./);
+    vi.useRealTimers();
+  });
+
+  // A non-risk tool that hangs must come back as a structured retryable
+  // TIMEOUT. Before this bound, 72 of 73 tools hung until the client aborted
+  // and surfaced a bare MCP -32001 the agent could not act on.
+  it('returns a TIMEOUT structured error when a non-risk tool hangs', async () => {
+    vi.useFakeTimers();
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createCambrianMcpServer({ apiKey: 'test' });
+    const client = new Client({ name: 'timeout-test', version: '1.0.0' }, { capabilities: {} });
+    setHangOpabinia(true);
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const pending = client.callTool({ name: 'cambrian_solana_latest_block', arguments: {} });
+      await vi.advanceTimersByTimeAsync(DEFAULT_TOOL_TIMEOUT_MS + 1000);
+      const result = await pending;
+      expect(result.isError).toBe(true);
+      expect(JSON.parse((result.content as { text: string }[])[0].text).error).toMatchObject({
+        code: 'TIMEOUT',
+        retryable: true,
+      });
+    } finally {
+      setHangOpabinia(false);
+      await client.close();
+      await server.close();
+      vi.useRealTimers();
+    }
   });
 
   it('propagates real rejections immediately without waiting for the timeout', async () => {
