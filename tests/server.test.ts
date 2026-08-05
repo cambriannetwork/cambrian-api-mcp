@@ -1,8 +1,11 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { CambrianData } from 'cambrian';
-import { CAMBRIAN_MCP_TOOLS } from 'cambrian/metadata';
+import { CAMBRIAN_MCP_TOOLS, CAMBRIAN_METADATA_GROUPS } from 'cambrian/metadata';
 import {
   DOCS_TOOL_NAME,
   DOCS_BASE_URL,
@@ -15,7 +18,6 @@ import {
   baseServerInstructions,
   buildToolInputSchema,
   buildToolResult,
-  callCambrianHealth,
   callCambrianTool,
   callSolanaTokenSnapshot,
   createCambrianMcpServer,
@@ -54,7 +56,8 @@ describe('Cambrian MCP tools', () => {
 
   it('lists canonical tools and docs tool', () => {
     const tools = listMcpTools();
-    expect(tools).toHaveLength(73);
+    expect(tools).toHaveLength(72);
+    expect(tools.some((tool) => tool.name === 'cambrian_health')).toBe(false);
     expect(tools.some((tool) => tool.name === DOCS_TOOL_NAME)).toBe(true);
     expect(tools.some((tool) => tool.name === 'cambrian_base_chains')).toBe(false);
     expect(tools.some((tool) => tool.name === 'cambrian_base_dexes')).toBe(true);
@@ -330,6 +333,187 @@ describe('server instructions', () => {
     createCambrianMcpServer({ apiKey: 'test', fetch: fetchFn });
     expect(fetchFn).not.toHaveBeenCalled();
   });
+
+  it('lists and executes tools from validated runtime metadata', async () => {
+    const resource = 'social-data/new-signal';
+    const metadata = {
+      ...CAMBRIAN_METADATA_GROUPS,
+      deep42: {
+        ...CAMBRIAN_METADATA_GROUPS.deep42,
+        resources: [...CAMBRIAN_METADATA_GROUPS.deep42.resources, resource],
+        spec: {
+          ...CAMBRIAN_METADATA_GROUPS.deep42.spec,
+          [resource]: {
+            apiPath: '/api/v1/deep42/social-data/new-signal',
+            method: 'GET',
+            params: { limit: { required: true, type: 'integer', strict: true } },
+          },
+        },
+      },
+    };
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createCambrianMcpServer({
+      apiKey: 'test',
+      metadataProvider: async () => metadata,
+    });
+    const client = new Client({ name: 'runtime-metadata-test', version: '1.0.0' }, { capabilities: {} });
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const listed = await client.listTools();
+      expect(listed.tools.some((tool) => tool.name === 'cambrian_deep42_social_data_new_signal'))
+        .toBe(true);
+
+      const result = await client.callTool({
+        name: 'cambrian_deep42_social_data_new_signal',
+        arguments: { limit: 2 },
+      });
+      expect(result.isError).not.toBe(true);
+      expect(calls.at(-1)).toMatchObject({
+        client: 'deep42',
+        apiPath: '/api/v1/deep42/social-data/new-signal',
+        params: { limit: 2 },
+      });
+      expect(CAMBRIAN_MCP_TOOLS.some((tool) => tool.resource === resource)).toBe(false);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it('falls back to bundled tools when runtime metadata loading fails', async () => {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createCambrianMcpServer({
+      apiKey: 'test',
+      metadataProvider: async () => { throw new Error('registry unavailable'); },
+    });
+    const client = new Client({ name: 'metadata-fallback-test', version: '1.0.0' }, { capabilities: {} });
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const listed = await client.listTools();
+      expect(listed.tools).toHaveLength(72);
+      expect(listed.tools.some((tool) => tool.name === 'cambrian_base_dexes')).toBe(true);
+
+      const result = await client.callTool({ name: 'cambrian_base_dexes', arguments: {} });
+      expect(result.isError).not.toBe(true);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it('reuses the 15-minute schema cache across MCP server instances', async () => {
+    const cacheRoot = mkdtempSync(join(tmpdir(), 'cambrian-mcp-schema-test-'));
+    const previousCacheRoot = process.env.XDG_CACHE_HOME;
+    process.env.XDG_CACHE_HOME = cacheRoot;
+    const openapiRequests: string[] = [];
+    const documents: Record<string, unknown> = {
+      'https://api.cambrian.org/openapi.json': {
+        openapi: '3.1.0',
+        info: { title: 'Gateway', version: '1' },
+        paths: {
+          '/api/v1/solana/new-signal': { get: { parameters: [] } },
+          '/api/v1/evm/new-signal': { get: { parameters: [] } },
+        },
+      },
+      'https://api.cambrian.org/deep42/openapi.json': {
+        openapi: '3.1.0',
+        info: { title: 'Deep42', version: '1' },
+        paths: { '/api/v1/deep42/social-data/new-signal': { get: { parameters: [] } } },
+      },
+      'https://api.cambrian.org/risk/openapi.json': {
+        openapi: '3.1.0',
+        info: { title: 'Risk', version: '1' },
+        paths: { '/api/v1/perp-risk-engine': { get: { parameters: [] } } },
+      },
+    };
+    const fetch = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith('/openapi.json')) {
+        openapiRequests.push(url);
+        return new Response(JSON.stringify(documents[url]), { status: 200 });
+      }
+      if (url === 'https://docs.cambrian.org/llms.txt') return new Response('', { status: 200 });
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof globalThis.fetch;
+
+    const listFromNewServer = async () => {
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const server = createCambrianMcpServer({ apiKey: 'test', fetch });
+      const client = new Client({ name: 'cache-test', version: '1.0.0' }, { capabilities: {} });
+      try {
+        await server.connect(serverTransport);
+        await client.connect(clientTransport);
+        return await client.listTools();
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    };
+
+    try {
+      const first = await listFromNewServer();
+      const second = await listFromNewServer();
+      expect(first.tools.some((tool) => tool.name === 'cambrian_deep42_social_data_new_signal'))
+        .toBe(true);
+      expect(second.tools.map((tool) => tool.name)).toEqual(first.tools.map((tool) => tool.name));
+      expect(openapiRequests).toEqual([
+        'https://api.cambrian.org/openapi.json',
+        'https://api.cambrian.org/deep42/openapi.json',
+        'https://api.cambrian.org/risk/openapi.json',
+      ]);
+    } finally {
+      if (previousCacheRoot === undefined) delete process.env.XDG_CACHE_HOME;
+      else process.env.XDG_CACHE_HOME = previousCacheRoot;
+      rmSync(cacheRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rechecks cached runtime metadata in a long-lived MCP session', async () => {
+    const resource = 'social-data/new-signal';
+    let loads = 0;
+    const metadataProvider = async () => {
+      loads += 1;
+      if (loads === 1) return CAMBRIAN_METADATA_GROUPS;
+      return {
+        ...CAMBRIAN_METADATA_GROUPS,
+        deep42: {
+          ...CAMBRIAN_METADATA_GROUPS.deep42,
+          resources: [...CAMBRIAN_METADATA_GROUPS.deep42.resources, resource],
+          spec: {
+            ...CAMBRIAN_METADATA_GROUPS.deep42.spec,
+            [resource]: {
+              apiPath: '/api/v1/deep42/social-data/new-signal',
+              method: 'GET',
+              params: {},
+            },
+          },
+        },
+      };
+    };
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createCambrianMcpServer({ apiKey: 'test', metadataProvider });
+    const client = new Client({ name: 'refresh-test', version: '1.0.0' }, { capabilities: {} });
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const first = await client.listTools();
+      const second = await client.listTools();
+      expect(first.tools.some((tool) => tool.name === 'cambrian_deep42_social_data_new_signal'))
+        .toBe(false);
+      expect(second.tools.some((tool) => tool.name === 'cambrian_deep42_social_data_new_signal'))
+        .toBe(true);
+      expect(loads).toBe(2);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
 });
 
 describe('SERVER_VERSION read from package.json', () => {
@@ -440,6 +624,7 @@ describe('buildToolResult', () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const server = createCambrianMcpServer({
       apiKey: 'test',
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
       fetch: (async () => new Response(JSON.stringify([{
         columns: [{ name: 'blockNumber', type: 'UInt64' }],
         data: [[123]],
@@ -534,7 +719,7 @@ describe('callSolanaTokenSnapshot', () => {
     // Override opabinia to throw on one path.
     const original = client.opabinia.query.bind(client.opabinia);
     client.opabinia.query = async (path: string, params: Record<string, unknown>) => {
-      if (path === '/api/v1/solana/token-details') throw new Error('details unavailable');
+      if (path === '/solana/token-details') throw new Error('details unavailable');
       return original(path, params);
     };
     const result = await callSolanaTokenSnapshot(client, 'TokenMint', 'SOL', '2026-01-01T00:00:00.000Z') as Record<string, unknown>;
@@ -582,44 +767,16 @@ describe('callSolanaTokenSnapshot', () => {
     };
     expect(result.deep42.scope).toBe('market-wide');
     expect(calls.some((call) => call.apiPath.endsWith('/social-data/sentiment-shifts'))).toBe(true);
-  });
-});
-
-describe('callCambrianHealth', () => {
-  beforeEach(() => resetCalls());
-
-  it('returns healthy when all services respond', async () => {
-    const client = new CambrianData({ apiKey: 'test' });
-    const result = await callCambrianHealth(client, '2026-01-01T00:00:00.000Z') as Record<string, unknown>;
-    expect(result.status).toBe('healthy');
-    expect(Array.isArray(result.services)).toBe(true);
-    const services = result.services as Array<{ service: string; status: string }>;
-    expect(services.every((s) => s.status === 'up')).toBe(true);
-    expect(calls.some((call) => call.apiPath === '/api/v1/evm/dexes')).toBe(true);
-    expect(calls.some((call) => call.apiPath === '/api/v1/evm/chains')).toBe(false);
-    // The risk probe is the service's own /health, not perp-risk-engine:
-    // the Monte Carlo engine took ~14 s and Promise.all made the whole health
-    // check that slow.
-    expect(calls.find((call) => call.client === 'risk')?.apiPath).toBe('/health');
-  });
-
-  it('reports degraded when a service is down, without throwing', async () => {
-    const client = new CambrianData({ apiKey: 'test' });
-    client.opabinia.query = async () => { throw new Error('solana down'); };
-    const result = await callCambrianHealth(client, '2026-01-01T00:00:00.000Z') as Record<string, unknown>;
-    expect(result.status).toBe('degraded');
-    const services = result.services as Array<{ service: string; status: string }>;
-    const solana = services.find((s) => s.service === 'solana');
-    expect(solana?.status).toBe('down');
+    expect(calls.every((call) => !call.apiPath.startsWith('/api/v1'))).toBe(true);
   });
 });
 
 describe('composite tools listed in listMcpTools', () => {
-  it('includes cambrian_solana_token_snapshot and cambrian_health only', () => {
+  it('includes only cambrian_solana_token_snapshot', () => {
     const tools = listMcpTools();
     const names = tools.map((t) => t.name);
     expect(names).toContain('cambrian_solana_token_snapshot');
-    expect(names).toContain('cambrian_health');
+    expect(names).not.toContain('cambrian_health');
     // Removed in 1.3.0: unfixable (no rate-limit headers) and redundant with the snapshot.
     expect(names).not.toContain('cambrian_usage');
     expect(names).not.toContain('cambrian_resolve_token');
@@ -675,12 +832,15 @@ describe('withTimeout', () => {
   });
 
   // A non-risk tool that hangs must come back as a structured retryable
-  // TIMEOUT. Before this bound, 72 of 73 tools hung until the client aborted
+  // TIMEOUT. Before this bound, 71 of 72 tools hung until the client aborted
   // and surfaced a bare MCP -32001 the agent could not act on.
   it('returns a TIMEOUT structured error when a non-risk tool hangs', async () => {
     vi.useFakeTimers();
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    const server = createCambrianMcpServer({ apiKey: 'test' });
+    const server = createCambrianMcpServer({
+      apiKey: 'test',
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
+    });
     const client = new Client({ name: 'timeout-test', version: '1.0.0' }, { capabilities: {} });
     setHangOpabinia(true);
     try {
@@ -727,8 +887,12 @@ describe('composite tools send parameters their endpoints actually accept', () =
   function assertRecordedCallsValidate() {
     expect(calls.length).toBeGreaterThan(0);
     for (const call of calls) {
-      const tool = CAMBRIAN_MCP_TOOLS.find((candidate) => candidate.apiPath === call.apiPath);
-      if (!tool) continue; // non-endpoint probes such as risk /health
+      const metadataPath = call.client === 'deep42'
+        ? `/api/v1/deep42${call.apiPath}`
+        : `/api/v1${call.apiPath}`;
+      const tool = CAMBRIAN_MCP_TOOLS.find((candidate) => candidate.apiPath === metadataPath);
+      expect(tool, `Missing metadata for ${call.client} ${call.apiPath}`).toBeDefined();
+      if (!tool) continue;
       expect(() => validateAndBuildParams(tool, call.params)).not.toThrow();
     }
   }
@@ -741,17 +905,5 @@ describe('composite tools send parameters their endpoints actually accept', () =
   it('cambrian_solana_token_snapshot with a symbol', async () => {
     await callSolanaTokenSnapshot(new CambrianData(), 'So11111111111111111111111111111111111111112', 'SOL', 'x');
     assertRecordedCallsValidate();
-  });
-
-  it('cambrian_health', async () => {
-    await callCambrianHealth(new CambrianData(), 'x');
-    assertRecordedCallsValidate();
-  });
-
-  it('cambrian_health probes risk /health, never the Monte Carlo engine', async () => {
-    await callCambrianHealth(new CambrianData(), 'x');
-    const riskCalls = calls.filter((call) => call.client === 'risk');
-    expect(riskCalls).toHaveLength(1);
-    expect(riskCalls[0].apiPath).toBe('/health');
   });
 });

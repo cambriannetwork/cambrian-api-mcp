@@ -12,10 +12,10 @@ Use this document to get connected and then to call tools well. If your runtime 
 Three kinds of tool:
 
 - **endpoint tools** — one per public Cambrian API endpoint, generated from API metadata, covering Solana DeFi, Base chain DeFi, Deep42 social intelligence, and perpetual risk
-- **composite workflow tools** — multi-endpoint reads in a single call, such as `cambrian_solana_token_snapshot` and `cambrian_health`
+- **composite workflow tools** — multi-endpoint reads in a single call, such as `cambrian_solana_token_snapshot`
 - **`cambrian_docs`** — live per-endpoint documentation from `docs.cambrian.org/llms.txt`
 
-The tool list is generated and changes as the API gains endpoints. Treat the live `tools/list` from your client as the authoritative inventory; every name and example in this document is illustrative, not exhaustive.
+The tool list is generated and changes as the API gains endpoints. Treat the live `tools/list` from your client as the authoritative inventory; every name and example in this document is illustrative, not exhaustive. Runtime OpenAPI discovery shares the CLI's 15-minute per-source request floor and falls back to the installed inventory when discovery is unavailable.
 
 Transports: stdio for local clients, Streamable HTTP for hosted and self-hosted deployments.
 
@@ -37,7 +37,7 @@ Without a key, every tool call fails with `AUTH_REQUIRED`. Ask the user to confi
 
 1. Get a Cambrian API key and put it in `CAMBRIAN_API_KEY`.
 2. Add the server to your client (hosted is the default — see below).
-3. Confirm the connection with `cambrian_health`.
+3. Confirm the connection by listing tools.
 4. Confirm a live read with `cambrian_base_dexes` (no required arguments).
 5. Before using an unfamiliar endpoint tool, call `cambrian_docs` with its path.
 
@@ -157,7 +157,6 @@ Currently available, as examples of the pattern:
 | Tool | Arguments | What it returns |
 | --- | --- | --- |
 | `cambrian_solana_token_snapshot` | `token_address`, optional `token_symbol` | token details, current price, 1h/4h/24h price-volume, top holders, pools, and Deep42 social data |
-| `cambrian_health` | none | up/down and latency per service (Solana, Base, Deep42, Risk) |
 
 Start a "tell me about this Solana token" prompt with `cambrian_solana_token_snapshot`, not six separate reads. Pass `token_symbol` whenever you know the ticker: with it, the Deep42 section is scoped to that token, and without it the section falls back to market-wide sentiment. The result labels which one you got under `deep42.scope`.
 
@@ -185,7 +184,7 @@ Failures come back as a structured object, never as a raw HTML error page:
 | `NOT_FOUND` | 404 | Address or resource does not exist. Verify the address; do not substitute another. |
 | `RATE_LIMITED` | 429 | Retryable. Back off, then retry. |
 | `TIMEOUT` | 408 | Retryable. Narrow the query and retry. |
-| `UPSTREAM_ERROR` | 5xx | Retryable. Check `cambrian_health` before retrying. |
+| `UPSTREAM_ERROR` | 5xx | Retryable. Back off, then retry. |
 | `MCP_ERROR` | 0 | Client-side or transport failure. Check config and key. |
 
 `cambrian_risk_perp_risk_engine` runs Monte Carlo simulations and carries a bounded server-side timeout so it stays inside client tool-call limits. A long `risk_horizon` is the usual cause of a timeout there.

@@ -7,7 +7,7 @@ Every call needs a Cambrian API key supplied by the caller. The hosted server an
 ## What You Get
 
 - one generated tool per public Cambrian API endpoint, built from Cambrian API metadata
-- composite workflow tools for token snapshots, token resolution, API health, and usage probes
+- a composite workflow tool for Solana token snapshots
 - `cambrian_docs` for live docs from `https://docs.cambrian.org/llms.txt`
 - stdio transport for local MCP clients
 - Streamable HTTP transport for hosted and self-hosted deployments
@@ -104,6 +104,12 @@ Examples:
 - `cambrian_solana_token_snapshot`
 
 Legacy double-underscore names such as `evm__chains` are intentionally not exposed.
+
+Endpoint tools come from the same validated runtime registry as the CLI. MCP
+rechecks that local cache for each tool-list/tool-call request, while OpenAPI
+network attempts are coalesced and limited to once per source every 15 minutes.
+If runtime discovery is unavailable, the installed bundled inventory remains
+available without changing existing tool names or schemas.
 
 ## Development
 

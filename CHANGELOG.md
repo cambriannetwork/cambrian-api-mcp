@@ -9,6 +9,23 @@ for those.
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-08-05
+
+### Changed
+
+- Endpoint tools now use `cambrian@1.1.7` runtime discovery, sharing its strict
+  15-minute per-OpenAPI-source request floor and bundled fallback across CLI and
+  MCP processes.
+- The Solana token snapshot now passes public gateway paths directly; generated
+  tools continue to resolve their metadata paths through the client's public
+  gateway normalization.
+
+### Removed
+
+- Removed the unsupported `cambrian_health` composite. Cambrian does not expose
+  matching service-health API endpoints. The MCP server's transport-level
+  `/health` route is unchanged.
+
 ## [1.3.2] - 2026-08-05
 
 ### Changed

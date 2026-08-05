@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import {
   CallToolRequestSchema,
@@ -10,9 +11,16 @@ import { CambrianData, ApiError } from 'cambrian';
 import {
   CAMBRIAN_MCP_TOOLS,
   CAMBRIAN_METADATA_GROUPS,
+  listCambrianTools as listCambrianMetadataTools,
+  type CambrianGroup,
+  type CambrianMetadataGroup,
   type CambrianToolMetadata,
   type ParamSpec,
 } from 'cambrian/metadata';
+
+const listRuntimeMetadataTools = listCambrianMetadataTools as unknown as (
+  metadata: Record<CambrianGroup, CambrianMetadataGroup>,
+) => CambrianToolMetadata[];
 
 export const SERVER_NAME = 'cambrian-api-mcp';
 // WS6: read SERVER_VERSION from package.json to avoid manual drift.
@@ -60,6 +68,46 @@ export interface CambrianMcpServerOptions {
   responseMaxLength?: number;
   /** Optional MCP server instructions (e.g. enriched from root llms.txt). */
   instructions?: string;
+  /** Validated runtime metadata provider; defaults to the bundled registry. */
+  metadataProvider?: () => Promise<Record<CambrianGroup, CambrianMetadataGroup>>;
+}
+
+async function loadRuntimeMetadata(
+  fetch: typeof globalThis.fetch,
+): Promise<Record<CambrianGroup, CambrianMetadataGroup>> {
+  const moduleName: string = 'cambrian/schema';
+  const schema = await import(moduleName) as {
+    loadRuntimeMetadataGroup: (
+      group: CambrianGroup,
+      runtime: {
+        stdout: (line: string) => void;
+        stdoutRaw: (text: string) => void;
+        stderr: (line: string) => void;
+        fetch: typeof globalThis.fetch;
+        env: Record<string, string | undefined>;
+        homedir: () => string;
+        isTTY: boolean;
+      },
+    ) => Promise<{
+      metadata: CambrianMetadataGroup;
+      status: { lastError?: string };
+    }>;
+  };
+  const runtime = {
+    stdout: () => {},
+    stdoutRaw: () => {},
+    stderr: () => {},
+    fetch,
+    env: process.env as Record<string, string | undefined>,
+    homedir,
+    isTTY: false,
+  };
+  const groups: CambrianGroup[] = ['solana', 'base', 'deep42', 'risk'];
+  const entries = await Promise.all(groups.map(async (group) => [
+    group,
+    (await schema.loadRuntimeMetadataGroup(group, runtime)).metadata,
+  ] as const));
+  return Object.fromEntries(entries) as Record<CambrianGroup, CambrianMetadataGroup>;
 }
 
 export interface JsonSchema {
@@ -178,7 +226,7 @@ function buildToolDescription(tool: CambrianToolMetadata): string {
   );
 }
 
-export function listMcpTools() {
+export function listMcpTools(dataTools: readonly CambrianToolMetadata[] = CAMBRIAN_MCP_TOOLS) {
   return [
     {
       name: DOCS_TOOL_NAME,
@@ -206,7 +254,7 @@ export function listMcpTools() {
         },
       },
     },
-    ...CAMBRIAN_MCP_TOOLS.map((tool) => ({
+    ...dataTools.map((tool) => ({
       name: tool.name,
       description: buildToolDescription(tool),
       inputSchema: buildToolInputSchema(tool),
@@ -232,17 +280,6 @@ export function listMcpTools() {
               'The result labels which under deep42.scope.',
           },
         },
-      },
-    },
-    {
-      name: 'cambrian_health',
-      description:
-        'Check availability of all Cambrian API services (Opabinia/Solana, Opabinia/Base, ' +
-        'Deep42, Risk). Concurrently probes a lightweight endpoint on each service and reports ' +
-        'up/down per service with latency. Returns retrievedAt timestamp.',
-      inputSchema: {
-        type: 'object',
-        properties: {},
       },
     },
     // `cambrian_usage` was removed: only Deep42 emits x-ratelimit-* headers.
@@ -741,36 +778,36 @@ export async function callSolanaTokenSnapshot(
   // for "7d"/"30d" is a 400, so the multi-day windows are not available here.
   const [details, price, pv1h, pv4h, pv24h, holders, pools, social] = await Promise.all([
     trySection('token-details', () =>
-      client.opabinia.query('/api/v1/solana/token-details', { token_address: tokenAddress })
+      client.opabinia.query('/solana/token-details', { token_address: tokenAddress })
     ),
     trySection('price-current', () =>
-      client.opabinia.query('/api/v1/solana/price-current', { token_address: tokenAddress })
+      client.opabinia.query('/solana/price-current', { token_address: tokenAddress })
     ),
     trySection('price-volume-1h', () =>
-      client.opabinia.query('/api/v1/solana/price-volume/single', { token_address: tokenAddress, timeframe: '1h' })
+      client.opabinia.query('/solana/price-volume/single', { token_address: tokenAddress, timeframe: '1h' })
     ),
     trySection('price-volume-4h', () =>
-      client.opabinia.query('/api/v1/solana/price-volume/single', { token_address: tokenAddress, timeframe: '4h' })
+      client.opabinia.query('/solana/price-volume/single', { token_address: tokenAddress, timeframe: '4h' })
     ),
     trySection('price-volume-24h', () =>
-      client.opabinia.query('/api/v1/solana/price-volume/single', { token_address: tokenAddress, timeframe: '24h' })
+      client.opabinia.query('/solana/price-volume/single', { token_address: tokenAddress, timeframe: '24h' })
     ),
     // The holders endpoint keys on `program_id` (the mint address), not
     // `token_address`. Passing `token_address` is a 400.
     trySection('token-holders', () =>
-      client.opabinia.query('/api/v1/solana/tokens/holders', { program_id: tokenAddress, limit: 20 })
+      client.opabinia.query('/solana/tokens/holders', { program_id: tokenAddress, limit: 20 })
     ),
     trySection('token-pool-search', () =>
-      client.opabinia.query('/api/v1/solana/token-pool-search', { token_address: tokenAddress })
+      client.opabinia.query('/solana/token-pool-search', { token_address: tokenAddress })
     ),
     // sentiment-shifts has no token filter, so it is market-wide. Only
     // token-analysis is token-scoped, and it keys on the ticker.
     tokenSymbol
       ? trySection('deep42-token-analysis', () =>
-          client.deep42.query('/api/v1/deep42/social-data/token-analysis', { token_symbol: tokenSymbol })
+          client.deep42.query('/social-data/token-analysis', { token_symbol: tokenSymbol })
         )
       : trySection('deep42-sentiment-shifts', () =>
-          client.deep42.query('/api/v1/deep42/social-data/sentiment-shifts', {})
+          client.deep42.query('/social-data/sentiment-shifts', {})
         ),
   ]);
   return {
@@ -786,45 +823,6 @@ export async function callSolanaTokenSnapshot(
       ? { scope: 'token', tokenAnalysis: social }
       : { scope: 'market-wide', sentimentShifts: social },
   };
-}
-
-export async function callCambrianHealth(
-  client: CambrianData,
-  retrievedAt: string,
-): Promise<unknown> {
-  async function probe(label: string, fn: () => Promise<unknown>) {
-    const start = Date.now();
-    try {
-      await fn();
-      return { service: label, status: 'up', latencyMs: Date.now() - start };
-    } catch (err) {
-      return {
-        service: label,
-        status: 'down',
-        latencyMs: Date.now() - start,
-        error: toStructuredError(err),
-      };
-    }
-  }
-
-  const [solana, base, deep42, risk] = await Promise.all([
-    probe('solana', () => client.opabinia.query('/api/v1/solana/latest-block', {})),
-    probe('base', () => client.opabinia.query('/api/v1/evm/dexes', {})),
-    probe('deep42', () => client.deep42.query('/api/v1/deep42/social-data/sentiment-shifts', {})),
-    // Probe the risk service's own /health, NOT perp-risk-engine. The engine
-    // runs Monte Carlo simulations (~14 s observed), and Promise.all makes the
-    // whole health check as slow as its slowest probe.
-    probe('risk', () => client.risk.query('/health', {})),
-  ]);
-
-  const services = [solana, base, deep42, risk] as Array<{
-    service: string;
-    status: string;
-    latencyMs: number;
-    error?: StructuredError;
-  }>;
-  const allUp = services.every((s) => s.status === 'up');
-  return { status: allUp ? 'healthy' : 'degraded', services, retrievedAt };
 }
 
 // ---------------------------------------------------------------------------
@@ -889,6 +887,10 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
     // 90 s default outlived every bound below it.
     timeoutMs: DEFAULT_TOOL_TIMEOUT_MS,
   });
+  const getDataTools = (): Promise<CambrianToolMetadata[]> =>
+    (options.metadataProvider ? options.metadataProvider() : loadRuntimeMetadata(fetchFn))
+      .then((metadata) => listRuntimeMetadataTools(metadata))
+      .catch(() => CAMBRIAN_MCP_TOOLS);
   const server = new Server(
     { name: SERVER_NAME, version: SERVER_VERSION },
     {
@@ -898,7 +900,7 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: listMcpTools(),
+    tools: listMcpTools(await getDataTools()),
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -925,16 +927,7 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
         return buildToolResult(result, maxLength, retrievedAt);
       }
 
-      if (name === 'cambrian_health') {
-        const result = await withTimeout(
-          callCambrianHealth(client, retrievedAt),
-          DEFAULT_TOOL_TIMEOUT_MS,
-          name,
-        );
-        return buildToolResult(result, maxLength, retrievedAt);
-      }
-
-      const tool = CAMBRIAN_MCP_TOOLS.find((candidate) => candidate.name === name);
+      const tool = (await getDataTools()).find((candidate) => candidate.name === name);
       if (!tool) throw new Error(`Unknown tool: ${name}`);
 
       // Every tool is bounded: risk keeps its shorter, Monte-Carlo-specific
