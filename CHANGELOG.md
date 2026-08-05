@@ -9,6 +9,13 @@ for those.
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-08-05
+
+### Changed
+
+- Per-endpoint documentation requests now use the stripped public docs paths.
+- Updated `cambrian` to 1.1.5 so API calls use the production gateway URLs.
+
 ## [1.3.1] - 2026-07-29
 
 ### Fixed

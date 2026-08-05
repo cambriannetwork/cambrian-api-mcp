@@ -36,7 +36,7 @@ export const MAX_RESPONSE_LENGTH_CAP = 100000;
 // WS5: bounded timeout for the risk tool. The perp-risk-engine runs Monte
 // Carlo simulations that can take 30-60 s depending on risk_horizon; we cap
 // at 40 s so the MCP response stays within LLM tool-call timeouts. A true
-// async/cached fix requires an upstream risk.cambrian.network job/poll API
+// async/cached fix requires an upstream api.cambrian.org/risk job/poll API
 // (not yet available).
 export const RISK_TOOL_TIMEOUT_MS = 40000;
 
@@ -137,7 +137,7 @@ export function normalizeDocPath(path: string): string {
 
 /** Build the per-endpoint llms.txt URL from a normalized doc path. */
 export function endpointDocsUrl(normalizedPath: string): string {
-  return `${DOCS_BASE_URL}/api/v1/${normalizedPath}/llms.txt`;
+  return `${DOCS_BASE_URL}/${normalizedPath}/llms.txt`;
 }
 
 /**

@@ -1,6 +1,6 @@
 {
   "name": "cambrian-api-mcp",
-  "version": "1.3.1",
+  "version": "1.3.2",
   "description": "Model Context Protocol server for Cambrian API - Access comprehensive DeFi data across Solana and EVM chains",
   "mcpName": "io.github.cambriannetwork/cambrian-api",
   "main": "dist/index.js",
@@ -45,7 +45,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "cambrian": "^1.1.2",
+    "cambrian": "^1.1.5",
     "cors": "^2.8.6",
     "express": "^4.22.2",
     "express-rate-limit": "^7.5.1"

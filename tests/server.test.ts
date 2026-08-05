@@ -243,7 +243,7 @@ describe('docs path helpers', () => {
   });
 
   it('builds the per-endpoint docs URL', () => {
-    expect(endpointDocsUrl('solana/price-current')).toBe(`${DOCS_BASE_URL}/api/v1/solana/price-current/llms.txt`);
+    expect(endpointDocsUrl('solana/price-current')).toBe(`${DOCS_BASE_URL}/solana/price-current/llms.txt`);
   });
 });
 
@@ -264,7 +264,7 @@ describe('tool description docs pointers', () => {
 
 describe('cambrian_docs resolution', () => {
   it('returns the per-endpoint llms.txt when a path is given', async () => {
-    const url = `${DOCS_BASE_URL}/api/v1/solana/price-current/llms.txt`;
+    const url = `${DOCS_BASE_URL}/solana/price-current/llms.txt`;
     const fetchFn = mockFetch({
       [url]: { body: '**URL**: solana/price-current\n## Query Parameters\ntoken_address (string)' },
       [DOCS_ROOT_URL]: { body: 'ROOT INDEX - should not be used when per-endpoint resolves' },
@@ -275,7 +275,7 @@ describe('cambrian_docs resolution', () => {
   });
 
   it('aliases base/... to the evm per-endpoint URL', async () => {
-    const evmUrl = `${DOCS_BASE_URL}/api/v1/evm/dexes/llms.txt`;
+    const evmUrl = `${DOCS_BASE_URL}/evm/dexes/llms.txt`;
     const fetchFn = mockFetch({
       [evmUrl]: { body: 'EVM DEXES per-endpoint docs' },
       [DOCS_ROOT_URL]: { body: 'root index' },
@@ -295,7 +295,7 @@ describe('cambrian_docs resolution', () => {
   });
 
   it('falls back to root when the per-endpoint URL serves an HTML landing page', async () => {
-    const url = `${DOCS_BASE_URL}/api/v1/solana/foo/llms.txt`;
+    const url = `${DOCS_BASE_URL}/solana/foo/llms.txt`;
     const fetchFn = mockFetch({
       [url]: { body: '<!DOCTYPE html><html><body>Docs landing</body></html>', contentType: 'text/html' },
       [DOCS_ROOT_URL]: { body: 'solana/foo - something\nother line' },
