@@ -13,7 +13,7 @@ Three kinds of tool:
 
 - **endpoint tools** — one per public Cambrian API endpoint, generated from API metadata, covering Solana DeFi, Base chain DeFi, Deep42 social intelligence, and perpetual risk
 - **composite workflow tools** — multi-endpoint reads in a single call, such as `cambrian_solana_token_snapshot`
-- **`cambrian_docs`** — live per-endpoint documentation from `docs.cambrian.org/llms.txt`
+- **`cambrian_docs`** — live endpoint and guide documentation from `docs.cambrian.org/llms.txt`
 
 The tool list is generated and changes as the API gains endpoints. Treat the live `tools/list` from your client as the authoritative inventory; every name and example in this document is illustrative, not exhaustive. Runtime OpenAPI discovery shares the CLI's 15-minute per-source request floor and falls back to the installed inventory when discovery is unavailable.
 
@@ -22,6 +22,9 @@ Transports: stdio for local clients, Streamable HTTP for hosted and self-hosted 
 ## Authentication
 
 Every call needs your own Cambrian API key. The hosted server and the local package both require the caller to supply one; neither ships nor proxies a shared key.
+Create one at `https://console.cambrian.org/`. x402 access without an API key is
+available through the separate CLI `cambrian pay` path, not through MCP
+transport.
 
 - **stdio**: set `CAMBRIAN_API_KEY` in the server process environment.
 - **HTTP**: send one of
@@ -143,10 +146,13 @@ Every endpoint tool's description ends with the docs path to call. `cambrian_doc
 { "path": "solana/price-current" }
 { "path": "base/dexes" }
 { "path": "deep42/social-data/sentiment-shifts" }
+{ "path": "guides/x402" }
 {}
 ```
 
-`base` is an alias for `evm` in docs paths; a leading `api/v1/` is stripped. Omitting `path` returns the root index of every available endpoint.
+`base` is an alias for `evm` in docs paths; a leading `api/v1/` is stripped. Omitting `path` returns the root index of available endpoints and guides.
+The same root index lists live guides. Fetch any indexed guide with
+`guides/<slug>`; guide names are not compiled into the MCP server.
 
 ## Composite Tools
 

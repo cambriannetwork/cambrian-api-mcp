@@ -202,6 +202,8 @@ export function baseServerInstructions(): string {
     `Use the \`${DOCS_TOOL_NAME}\` tool to fetch live per-endpoint documentation including ` +
     `parameters, units, constraints, and response-field meanings from ` +
     `docs.cambrian.org/llms.txt when parameter or response-field detail is needed. ` +
+    `The root index also lists live guides; fetch any with path "guides/<slug>" ` +
+    `(for example, "guides/x402"). ` +
     `Note: "base" is an alias for \`evm\` in docs paths.`
   );
 }
@@ -232,11 +234,12 @@ export function listMcpTools(dataTools: readonly CambrianToolMetadata[] = CAMBRI
       name: DOCS_TOOL_NAME,
       description:
         'Get Cambrian API documentation from docs.cambrian.org/llms.txt. ' +
-        'Provide an endpoint path (e.g. "solana/price-current", "base/dexes", ' +
-        '"deep42/social-data/sentiment-shifts") to fetch the per-endpoint docs with ' +
+        'Provide an endpoint or guide path (e.g. "solana/price-current", "base/dexes", ' +
+        '"deep42/social-data/sentiment-shifts", "guides/x402") to fetch its docs with ' +
         'full parameter descriptions, units, constraints, and response-field meanings. ' +
+        'Use "guides/<slug>" for any guide listed in the live root index. ' +
         '"base" is an alias for `evm` in endpoint paths. ' +
-        'Omit path to get the root index listing all available endpoints.',
+        'Omit path to get the root index listing all available endpoints and guides.',
       inputSchema: {
         type: 'object',
         properties: {
