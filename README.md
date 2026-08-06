@@ -3,12 +3,15 @@
 Model Context Protocol server for the Cambrian API. It exposes the same product surface as the `cambrian` CLI for agents that need live DeFi, social intelligence, risk, and API documentation tools.
 
 Every call needs a Cambrian API key supplied by the caller. The hosted server and local package both require one; the server never ships or proxies a shared key.
+Create a key at `https://console.cambrian.org/`. For x402 pay-per-call access
+without an API key, use `cambrian pay --help`; MCP transport still requires a
+caller-supplied key.
 
 ## What You Get
 
 - one generated tool per public Cambrian API endpoint, built from Cambrian API metadata
 - a composite workflow tool for Solana token snapshots
-- `cambrian_docs` for live docs from `https://docs.cambrian.org/llms.txt`
+- `cambrian_docs` for live endpoint and guide docs from `https://docs.cambrian.org/llms.txt`
 - stdio transport for local MCP clients
 - Streamable HTTP transport for hosted and self-hosted deployments
 
@@ -102,6 +105,9 @@ Examples:
 - `cambrian_risk_perp_risk_engine`
 - `cambrian_docs`
 - `cambrian_solana_token_snapshot`
+
+Call `cambrian_docs` without a path to discover the live root index, or use
+`guides/<slug>` (for example, `guides/x402`) for any guide listed there.
 
 Legacy double-underscore names such as `evm__chains` are intentionally not exposed.
 

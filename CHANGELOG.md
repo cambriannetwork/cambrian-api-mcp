@@ -9,6 +9,16 @@ for those.
 
 ## [Unreleased]
 
+## [1.3.4] - 2026-08-06
+
+### Changed
+
+- MCP instructions and `cambrian_docs` guidance now advertise live guide paths
+  such as `guides/faqs`; newly indexed guides remain available through the
+  existing dynamic documentation tool without another MCP release.
+- API-key guidance now links to `console.cambrian.org` and clarifies that x402
+  pay-per-call access is available through the separate Cambrian CLI flow.
+
 ## [1.3.3] - 2026-08-05
 
 ### Changed

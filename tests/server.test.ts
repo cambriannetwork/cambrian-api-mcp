@@ -262,6 +262,8 @@ describe('tool description docs pointers', () => {
     const docs = tools.find((t) => t.name === DOCS_TOOL_NAME)!;
     expect(docs.description.toLowerCase()).toContain('endpoint path');
     expect(docs.description.toLowerCase()).toContain('alias for `evm');
+    expect(docs.description).toContain('guides/<slug>');
+    expect(docs.description).toContain('guides/x402');
   });
 });
 
@@ -285,6 +287,19 @@ describe('cambrian_docs resolution', () => {
     });
     const out = await fetchDocumentationForTest(fetchFn, { path: 'base/dexes' });
     expect(out).toContain('EVM DEXES per-endpoint docs');
+  });
+
+  it('returns a dynamically indexed guide by its docs path', async () => {
+    const guideUrl = `${DOCS_BASE_URL}/guides/new-guide/llms.txt`;
+    const fetchFn = mockFetch({
+      [guideUrl]: { body: '# New guide\nAdded after this MCP release.' },
+      [DOCS_ROOT_URL]: { body: 'ROOT INDEX - should not be used when the guide resolves' },
+    });
+
+    const out = await fetchDocumentationForTest(fetchFn, { path: 'guides/new-guide' });
+
+    expect(out).toContain('Added after this MCP release.');
+    expect(out).not.toContain('ROOT INDEX');
   });
 
   it('falls back to the root index (line-filtered) when the per-endpoint page is missing', async () => {
@@ -326,6 +341,8 @@ describe('server instructions', () => {
     const base = baseServerInstructions();
     expect(base).toContain(DOCS_TOOL_NAME);
     expect(base.toLowerCase()).toContain('parameters');
+    expect(base).toContain('guides/<slug>');
+    expect(base).toContain('guides/x402');
   });
 
   it('does not fetch llms.txt while constructing a data server', () => {
