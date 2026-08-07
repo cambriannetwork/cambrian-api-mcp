@@ -9,6 +9,15 @@ for those.
 
 ## [Unreleased]
 
+## [1.3.5] - 2026-08-08
+
+### Changed
+
+- Updated to `cambrian@1.2.0`, including chain-specific EVM and Solana OpenAPI
+  discovery with bounded fallback, caching, and request cooldown behavior.
+- Release tests now validate the dynamic CLI metadata contract instead of
+  assuming fixed tool counts, defaults, or schema URLs.
+
 ## [1.3.4] - 2026-08-06
 
 ### Changed

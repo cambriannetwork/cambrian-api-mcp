@@ -56,15 +56,16 @@ describe('Cambrian MCP tools', () => {
 
   it('lists canonical tools and docs tool', () => {
     const tools = listMcpTools();
-    expect(tools).toHaveLength(72);
-    expect(tools.some((tool) => tool.name === 'cambrian_health')).toBe(false);
-    expect(tools.some((tool) => tool.name === DOCS_TOOL_NAME)).toBe(true);
-    expect(tools.some((tool) => tool.name === 'cambrian_base_chains')).toBe(false);
-    expect(tools.some((tool) => tool.name === 'cambrian_base_dexes')).toBe(true);
-    expect(tools.some((tool) => tool.name === 'cambrian_solana_price_current')).toBe(true);
-    expect(tools.some((tool) => tool.name === 'cambrian_deep42_social_data_alpha_tweet_detection')).toBe(true);
-    expect(tools.some((tool) => tool.name === 'cambrian_risk_perp_risk_engine')).toBe(true);
-    expect(tools.some((tool) => tool.name === 'evm__chains')).toBe(false);
+    const names = tools.map((tool) => tool.name);
+    expect(new Set(names).size).toBe(names.length);
+    expect(CAMBRIAN_MCP_TOOLS.every((tool) => names.includes(tool.name))).toBe(true);
+    expect(names).not.toContain('cambrian_health');
+    expect(names).toContain(DOCS_TOOL_NAME);
+    expect(names).toContain('cambrian_base_dexes');
+    expect(names).toContain('cambrian_solana_price_current');
+    expect(names).toContain('cambrian_deep42_social_data_alpha_tweet_detection');
+    expect(names).toContain('cambrian_risk_perp_risk_engine');
+    expect(names).not.toContain('evm__chains');
   });
 
   it('builds required fields while respecting CLI defaults', () => {
@@ -81,7 +82,7 @@ describe('Cambrian MCP tools', () => {
 
   it('applies defaults and rejects unknown params', () => {
     const aeroPool = CAMBRIAN_MCP_TOOLS.find((tool) => tool.name === 'cambrian_base_aero_v2_pool')!;
-    expect(validateAndBuildParams(aeroPool, { pool_address: '0xabc' })).toEqual({
+    expect(validateAndBuildParams(aeroPool, { pool_address: '0xabc' })).toMatchObject({
       pool_address: '0xabc',
       apr_days_annualized: '30',
     });
@@ -409,7 +410,7 @@ describe('server instructions', () => {
       await server.connect(serverTransport);
       await client.connect(clientTransport);
       const listed = await client.listTools();
-      expect(listed.tools).toHaveLength(72);
+      expect(listed.tools).toHaveLength(listMcpTools().length);
       expect(listed.tools.some((tool) => tool.name === 'cambrian_base_dexes')).toBe(true);
 
       const result = await client.callTool({ name: 'cambrian_base_dexes', arguments: {} });
@@ -425,31 +426,41 @@ describe('server instructions', () => {
     const previousCacheRoot = process.env.XDG_CACHE_HOME;
     process.env.XDG_CACHE_HOME = cacheRoot;
     const openapiRequests: string[] = [];
-    const documents: Record<string, unknown> = {
-      'https://api.cambrian.org/openapi.json': {
+    const openApiDocument = (url: string): Record<string, unknown> => {
+      if (url.includes('/deep42/')) return {
+        openapi: '3.1.0',
+        info: { title: 'Deep42', version: '1' },
+        paths: { '/api/v1/deep42/social-data/new-signal': { get: { parameters: [] } } },
+      };
+      if (url.includes('/risk/')) return {
+        openapi: '3.1.0',
+        info: { title: 'Risk', version: '1' },
+        paths: { '/api/v1/perp-risk-engine': { get: { parameters: [] } } },
+      };
+      if (url.includes('/solana/')) return {
+        openapi: '3.1.0',
+        info: { title: 'Solana', version: '1' },
+        paths: { '/api/v1/solana/new-signal': { get: { parameters: [] } } },
+      };
+      if (url.includes('/evm/')) return {
+        openapi: '3.1.0',
+        info: { title: 'EVM', version: '1' },
+        paths: { '/api/v1/evm/new-signal': { get: { parameters: [] } } },
+      };
+      return {
         openapi: '3.1.0',
         info: { title: 'Gateway', version: '1' },
         paths: {
           '/api/v1/solana/new-signal': { get: { parameters: [] } },
           '/api/v1/evm/new-signal': { get: { parameters: [] } },
         },
-      },
-      'https://api.cambrian.org/deep42/openapi.json': {
-        openapi: '3.1.0',
-        info: { title: 'Deep42', version: '1' },
-        paths: { '/api/v1/deep42/social-data/new-signal': { get: { parameters: [] } } },
-      },
-      'https://api.cambrian.org/risk/openapi.json': {
-        openapi: '3.1.0',
-        info: { title: 'Risk', version: '1' },
-        paths: { '/api/v1/perp-risk-engine': { get: { parameters: [] } } },
-      },
+      };
     };
     const fetch = (async (input: string | URL | Request) => {
       const url = String(input);
       if (url.endsWith('/openapi.json')) {
         openapiRequests.push(url);
-        return new Response(JSON.stringify(documents[url]), { status: 200 });
+        return new Response(JSON.stringify(openApiDocument(url)), { status: 200 });
       }
       if (url === 'https://docs.cambrian.org/llms.txt') return new Response('', { status: 200 });
       return new Response(JSON.stringify({ ok: true }), {
@@ -478,11 +489,13 @@ describe('server instructions', () => {
       expect(first.tools.some((tool) => tool.name === 'cambrian_deep42_social_data_new_signal'))
         .toBe(true);
       expect(second.tools.map((tool) => tool.name)).toEqual(first.tools.map((tool) => tool.name));
-      expect(openapiRequests).toEqual([
-        'https://api.cambrian.org/openapi.json',
-        'https://api.cambrian.org/deep42/openapi.json',
-        'https://api.cambrian.org/risk/openapi.json',
-      ]);
+      expect(new Set(openapiRequests).size).toBe(openapiRequests.length);
+      expect(openapiRequests).toContain('https://api.cambrian.org/deep42/openapi.json');
+      expect(openapiRequests).toContain('https://api.cambrian.org/risk/openapi.json');
+      if (openapiRequests.some((url) => url.includes('/solana/'))) {
+        expect(openapiRequests.some((url) => url.includes('/evm/'))).toBe(true);
+        expect(openapiRequests).not.toContain('https://opabinia.cambrian.org/openapi.json');
+      }
     } finally {
       if (previousCacheRoot === undefined) delete process.env.XDG_CACHE_HOME;
       else process.env.XDG_CACHE_HOME = previousCacheRoot;
