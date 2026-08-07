@@ -32,6 +32,8 @@ const forbiddenTerms = [
   text('68', '+ DeFi Tools'),
   text('cambrian-mcp-', 'verisense'),
   text('cambrian-mcp-server-prod-', '981646676182.us-central1.run.app'),
+  text('opabinia.cambrian', '.network'),
+  text('https://api.cambrian.org', '/openapi.json'),
 ];
 
 const skipDirs = new Set(['.git']);
@@ -130,7 +132,7 @@ if (existsSync(pkgPath)) {
   if (pkg.repository?.url !== publicRepo) fail(`package.json repository.url must be ${publicRepo}`);
   if (pkg.homepage !== publicHome) fail(`package.json homepage must be ${publicHome}`);
   if (pkg.bugs?.url !== publicBugs) fail(`package.json bugs.url must be ${publicBugs}`);
-  if (pkg.dependencies?.cambrian !== '^1.1.7') fail('package.json must depend on cambrian@^1.1.7');
+  if (pkg.dependencies?.cambrian !== '^1.2.0') fail('package.json must depend on cambrian@^1.2.0');
   if (pkg.scripts?.ci !== 'npm test && npm run build') {
     fail('package.json scripts.ci must be "npm test && npm run build"');
   }
