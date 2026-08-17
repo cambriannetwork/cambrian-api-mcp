@@ -144,10 +144,10 @@ The workflow:
 
 ## Registry
 
-`server.json` is kept ready for MCP Registry submission under:
+The official MCP Registry publishes this server under:
 
 ```text
 io.github.cambriannetwork/cambrian-api
 ```
 
-The manifest uses `https://mcp.cambrian.org/mcp`, matching the production edge URL emitted by CI/CD. Do not publish the registry entry until DNS resolves and a production MCP smoke test passes through that hostname.
+The manifest uses `https://mcp.cambrian.org/mcp`, which matches the production edge URL. The public release workflow publishes each new Registry version after npm publication.
