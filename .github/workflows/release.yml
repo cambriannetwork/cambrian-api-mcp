@@ -93,3 +93,35 @@ jobs:
           gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file /tmp/release-notes.md
         env:
           GH_TOKEN: ${{ github.token }}
+
+  registry:
+    name: Publish to MCP Registry
+    needs: [verify, publish]
+    if: ${{ always() && needs.verify.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.publish.result == 'success') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+
+      - name: Validate MCP Registry metadata
+        run: ./mcp-publisher validate server.json
+
+      - name: Authenticate to MCP Registry
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish to MCP Registry
+        run: ./mcp-publisher publish server.json
+
+      - name: Verify MCP Registry publication
+        run: |
+          version="$(node -p "require('./server.json').version")"
+          curl --fail --silent --show-error \
+            "https://registry.modelcontextprotocol.io/v0.1/servers/io.github.cambriannetwork%2Fcambrian-api/versions/$version" \
+            >/dev/null
