@@ -128,7 +128,7 @@ Names are canonical and prefixed with `cambrian_`, then the service group and th
 - `cambrian_deep42_social_data_sentiment_shifts`
 - `cambrian_risk_perp_risk_engine`
 
-Legacy double-underscore names such as `evm__chains` are intentionally not exposed. Do not guess a tool name — list tools, or call `cambrian_docs` with no `path` for the root endpoint index.
+Do not guess a tool name. List tools, or call `cambrian_docs` with no `path` for the root endpoint index.
 
 ## Routing
 
@@ -146,15 +146,15 @@ Every endpoint tool's description ends with the docs path to call. `cambrian_doc
 
 ```json
 { "path": "solana/price-current" }
-{ "path": "base/dexes" }
+{ "path": "evm/dexes" }
 { "path": "deep42/social-data/sentiment-shifts" }
 { "path": "guides/x402" }
 {}
 ```
 
-`base` is an alias for `evm` in docs paths; a leading `api/v1/` is stripped. Omitting `path` returns the root index of available endpoints and guides.
-The same root index lists live guides. Fetch any indexed guide with
-`guides/<slug>`; guide names are not compiled into the MCP server.
+Use `evm/...` documentation paths for Base and Ethereum tools. Omit `path` to
+return the root index of available endpoints and guides. Fetch an indexed guide
+with `guides/<slug>`.
 
 ## Composite Tools
 

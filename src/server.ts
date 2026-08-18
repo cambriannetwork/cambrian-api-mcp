@@ -224,20 +224,20 @@ export function endpointDocsUrl(normalizedPath: string): string {
 /**
  * Return the static base MCP server instructions string.
  *
- * Describes the server, the cambrian_docs tool, and the base->evm alias.
+ * Describes the server and the cambrian_docs tool.
  * Used as a deterministic fallback (no fetch) so tests can compare against it.
  */
 export function baseServerInstructions(): string {
   return (
     `This is the Cambrian API MCP server. ` +
-    `It provides 1:1 tools for every public Cambrian API endpoint (Solana DeFi, Base chain DeFi, ` +
+    `It provides 1:1 tools for every public Cambrian API endpoint (Solana, Base, and Ethereum DeFi, ` +
     `Deep42 social intelligence, and perpetual risk analysis) plus composite workflow tools. ` +
     `Use the \`${DOCS_TOOL_NAME}\` tool to fetch live per-endpoint documentation including ` +
     `parameters, units, constraints, and response-field meanings from ` +
     `docs.cambrian.org/llms.txt when parameter or response-field detail is needed. ` +
     `The root index also lists live guides; fetch any with path "guides/<slug>" ` +
     `(for example, "guides/x402"). ` +
-    `Note: "base" is an alias for \`evm\` in docs paths.`
+    `Use "evm/..." documentation paths for Base and Ethereum tools.`
   );
 }
 
@@ -269,11 +269,11 @@ export function listMcpTools(
       name: DOCS_TOOL_NAME,
       description:
         'Get Cambrian API documentation from docs.cambrian.org/llms.txt. ' +
-        'Provide an endpoint or guide path (e.g. "solana/price-current", "base/dexes", ' +
+        'Provide an endpoint or guide path (e.g. "solana/price-current", "evm/dexes", ' +
         '"deep42/social-data/sentiment-shifts", "guides/x402") to fetch its docs with ' +
         'full parameter descriptions, units, constraints, and response-field meanings. ' +
         'Use "guides/<slug>" for any guide listed in the live root index. ' +
-        '"base" is an alias for `evm` in endpoint paths. ' +
+        'Use `evm` endpoint paths for Base and Ethereum tools. ' +
         'Omit path to get the root index listing all available endpoints and guides.',
       inputSchema: {
         type: 'object',
@@ -282,7 +282,7 @@ export function listMcpTools(
             type: 'string',
             description:
               'Endpoint path to fetch docs for. E.g. "solana/price-current", ' +
-              '"base/dexes" (alias for `evm/dexes`), "deep42/social-data/sentiment-shifts". ' +
+              '"evm/dexes", "deep42/social-data/sentiment-shifts". ' +
               'Omit for the root llms.txt index.',
           },
           _maxResponseLength: {

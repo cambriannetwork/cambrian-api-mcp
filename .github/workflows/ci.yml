@@ -48,3 +48,11 @@ jobs:
 
       - name: Verify package contents
         run: npm pack --dry-run
+
+      - name: Refresh skills.sh
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          refresh_dir="$(mktemp -d)"
+          cd "$refresh_dir"
+          npx --yes skills@latest add "$GITHUB_REPOSITORY" \
+            --skill cambrian-mcp --agent codex --copy --yes

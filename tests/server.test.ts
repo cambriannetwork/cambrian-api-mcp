@@ -259,10 +259,11 @@ describe('tool description docs pointers', () => {
     const price = tools.find((t) => t.name === 'cambrian_solana_price_current')!;
     expect(price.description).toContain('Query Cambrian solana price current data.');
     expect(price.description).toContain(`call ${DOCS_TOOL_NAME} with path "solana/price-current"`);
-    // the docs tool itself documents the path arg + base->evm alias
+    // the docs tool itself gives the canonical endpoint path
     const docs = tools.find((t) => t.name === DOCS_TOOL_NAME)!;
     expect(docs.description.toLowerCase()).toContain('endpoint path');
-    expect(docs.description.toLowerCase()).toContain('alias for `evm');
+    expect(docs.description).toContain('"evm/dexes"');
+    expect(docs.description.toLowerCase()).not.toContain('alias');
     expect(docs.description).toContain('guides/<slug>');
     expect(docs.description).toContain('guides/x402');
   });
@@ -344,6 +345,8 @@ describe('server instructions', () => {
     expect(base.toLowerCase()).toContain('parameters');
     expect(base).toContain('guides/<slug>');
     expect(base).toContain('guides/x402');
+    expect(base).toContain('"evm/..."');
+    expect(base.toLowerCase()).not.toContain('alias');
   });
 
   it('does not fetch llms.txt while constructing a data server', () => {

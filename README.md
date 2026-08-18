@@ -110,8 +110,6 @@ Examples:
 Call `cambrian_docs` without a path to discover the live root index, or use
 `guides/<slug>` (for example, `guides/x402`) for any guide listed there.
 
-Legacy double-underscore names such as `evm__chains` are intentionally not exposed.
-
 Endpoint tools come from the same validated runtime registry as the CLI. MCP
 rechecks that local cache for each tool-list/tool-call request, while OpenAPI
 network attempts are coalesced and limited to once per source every 15 minutes.

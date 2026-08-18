@@ -9,6 +9,16 @@ for those.
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-08-18
+
+### Changed
+
+- Updated Base and Ethereum documentation examples to use the public `evm/...`
+  paths.
+- Removed obsolete internal-path and legacy tool-name guidance from user-facing
+  documentation.
+- Updated to `cambrian@1.3.1` for current public x402 resource URLs.
+
 ## [1.4.0] - 2026-08-18
 
 ### Added
