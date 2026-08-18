@@ -9,6 +9,13 @@ for those.
 
 ## [Unreleased]
 
+## [1.3.7] - 2026-08-18
+
+### Changed
+
+- Refined the MCP Registry description. It now groups Solana and EVM as DeFi
+  data sources and describes perpetual risk as analysis.
+
 ## [1.3.6] - 2026-08-18
 
 ### Fixed
