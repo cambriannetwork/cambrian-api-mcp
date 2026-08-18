@@ -132,7 +132,7 @@ if (existsSync(pkgPath)) {
   if (pkg.repository?.url !== publicRepo) fail(`package.json repository.url must be ${publicRepo}`);
   if (pkg.homepage !== publicHome) fail(`package.json homepage must be ${publicHome}`);
   if (pkg.bugs?.url !== publicBugs) fail(`package.json bugs.url must be ${publicBugs}`);
-  if (pkg.dependencies?.cambrian !== '^1.2.0') fail('package.json must depend on cambrian@^1.2.0');
+  if (pkg.dependencies?.cambrian !== '^1.3.0') fail('package.json must depend on cambrian@^1.3.0');
   if (pkg.scripts?.ci !== 'npm test && npm run build') {
     fail('package.json scripts.ci must be "npm test && npm run build"');
   }

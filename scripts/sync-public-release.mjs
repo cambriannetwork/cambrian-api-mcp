@@ -121,7 +121,7 @@ if (!options.allowDirty) {
 }
 
 const excluded = [
-  '.git/',
+  '.git',
   '.github/',
   'LICENSE',
   'CONTRIBUTING.md',

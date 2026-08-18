@@ -11,7 +11,7 @@ Use this document to get connected and then to call tools well. If your runtime 
 
 Three kinds of tool:
 
-- **endpoint tools** — one per public Cambrian API endpoint, generated from API metadata, covering Solana DeFi, Base chain DeFi, Deep42 social intelligence, and perpetual risk
+- **endpoint tools** — generated from API metadata for Solana, Base, Ethereum, Deep42, and perpetual risk
 - **composite workflow tools** — multi-endpoint reads in a single call, such as `cambrian_solana_token_snapshot`
 - **`cambrian_docs`** — live endpoint and guide documentation from `docs.cambrian.org/llms.txt`
 
@@ -123,6 +123,7 @@ Names are canonical and prefixed with `cambrian_`, then the service group and th
 - `cambrian_solana_price_current`
 - `cambrian_solana_token_details`
 - `cambrian_base_dexes`
+- `cambrian_ethereum_dexes`
 - `cambrian_base_uniswap_v3_pool`
 - `cambrian_deep42_social_data_sentiment_shifts`
 - `cambrian_risk_perp_risk_engine`
@@ -133,10 +134,11 @@ Legacy double-underscore names such as `evm__chains` are intentionally not expos
 
 - Solana tokens, pools, prices, transactions → `cambrian_solana_*`
 - Base chain tokens, pools, TVL, prices → `cambrian_base_*`
+- Ethereum tokens, pools, TVL, prices → `cambrian_ethereum_*`
 - Social sentiment, alpha tweets, influencer credibility → `cambrian_deep42_*`
 - Perpetual position risk, liquidation, position sizing → `cambrian_risk_perp_risk_engine`
 
-Never send a Solana mint address to a Base tool or a Base contract address to a Solana tool. If the user has not supplied a pool or token address, ask for it — do not guess one.
+Never send a Solana mint address to an EVM tool. Never send an EVM contract address to a Solana tool. If the user has not supplied a pool or token address, ask for it. Do not guess one.
 
 ## Use `cambrian_docs` Before Unfamiliar Endpoints
 

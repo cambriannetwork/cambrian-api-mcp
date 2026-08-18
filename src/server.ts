@@ -22,6 +22,39 @@ const listRuntimeMetadataTools = listCambrianMetadataTools as unknown as (
   metadata: Record<CambrianGroup, CambrianMetadataGroup>,
 ) => CambrianToolMetadata[];
 
+const BASE_CHAIN_ID = 8453;
+const ETHEREUM_CHAIN_ID = 1;
+
+function supportsChain(param: ParamSpec, chainId: number): boolean {
+  return param.numericEnum?.includes(chainId) === true ||
+    (param.min === chainId && param.max === chainId);
+}
+
+export function projectEvmTools(tools: readonly CambrianToolMetadata[]): CambrianToolMetadata[] {
+  return tools.flatMap((tool) => {
+    if (tool.group !== 'base') return [tool];
+    const chain = tool.params.find((param) => param.name === 'chain_id');
+    const project = (chainId: number, ethereum = false): CambrianToolMetadata | null => {
+      if ((!chain && ethereum) || (chain && !supportsChain(chain.spec, chainId))) return null;
+      if (!chain) return tool;
+      const { numericEnum: _numericEnum, ...spec } = chain.spec;
+      return {
+        ...tool,
+        ...(ethereum ? {
+          name: tool.name.replace(/^cambrian_base_/, 'cambrian_ethereum_'),
+          description: tool.description.replace('Cambrian base ', 'Cambrian Ethereum '),
+        } : {}),
+        params: tool.params.map((param) => param === chain ? {
+          ...param,
+          spec: { ...spec, default: chainId, min: chainId, max: chainId },
+        } : param),
+      };
+    };
+    return [project(BASE_CHAIN_ID), project(ETHEREUM_CHAIN_ID, true)]
+      .filter((candidate): candidate is CambrianToolMetadata => candidate !== null);
+  });
+}
+
 export const SERVER_NAME = 'cambrian-api-mcp';
 // WS6: read SERVER_VERSION from package.json to avoid manual drift.
 export const SERVER_VERSION: string = (() => {
@@ -228,7 +261,9 @@ function buildToolDescription(tool: CambrianToolMetadata): string {
   );
 }
 
-export function listMcpTools(dataTools: readonly CambrianToolMetadata[] = CAMBRIAN_MCP_TOOLS) {
+export function listMcpTools(
+  dataTools: readonly CambrianToolMetadata[] = projectEvmTools(CAMBRIAN_MCP_TOOLS),
+) {
   return [
     {
       name: DOCS_TOOL_NAME,
@@ -892,8 +927,8 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
   });
   const getDataTools = (): Promise<CambrianToolMetadata[]> =>
     (options.metadataProvider ? options.metadataProvider() : loadRuntimeMetadata(fetchFn))
-      .then((metadata) => listRuntimeMetadataTools(metadata))
-      .catch(() => CAMBRIAN_MCP_TOOLS);
+      .then((metadata) => projectEvmTools(listRuntimeMetadataTools(metadata)))
+      .catch(() => projectEvmTools(CAMBRIAN_MCP_TOOLS));
   const server = new Server(
     { name: SERVER_NAME, version: SERVER_VERSION },
     {

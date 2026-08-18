@@ -399,6 +399,67 @@ describe('server instructions', () => {
     }
   });
 
+  it('lists and executes chain-specific Base and Ethereum tools', async () => {
+    const metadata = {
+      ...CAMBRIAN_METADATA_GROUPS,
+      base: {
+        ...CAMBRIAN_METADATA_GROUPS.base,
+        resources: ['tokens', 'aero-v2-pools'],
+        spec: {
+          tokens: {
+            apiPath: '/api/v1/evm/tokens',
+            method: 'GET',
+            params: {
+              chain_id: {
+                required: false,
+                type: 'integer',
+                numericEnum: [1, 8453],
+                default: 8453,
+                strict: true,
+              },
+            },
+          },
+          'aero-v2-pools': {
+            apiPath: '/api/v1/evm/aero/v2/pools',
+            method: 'GET',
+            params: {
+              chain_id: {
+                required: false,
+                type: 'integer',
+                min: 8453,
+                max: 8453,
+                default: 8453,
+                strict: true,
+              },
+            },
+          },
+        },
+      },
+    } as unknown as typeof CAMBRIAN_METADATA_GROUPS;
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createCambrianMcpServer({ apiKey: 'test', metadataProvider: async () => metadata });
+    const client = new Client({ name: 'ethereum-tools-test', version: '1.0.0' }, { capabilities: {} });
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const listed = await client.listTools();
+      const names = listed.tools.map((tool) => tool.name);
+      expect(names).toContain('cambrian_base_tokens');
+      expect(names).toContain('cambrian_ethereum_tokens');
+      expect(names).not.toContain('cambrian_ethereum_aero_v2_pools');
+
+      await client.callTool({ name: 'cambrian_base_tokens', arguments: {} });
+      await client.callTool({ name: 'cambrian_ethereum_tokens', arguments: {} });
+      expect(calls.slice(-2)).toMatchObject([
+        { apiPath: '/api/v1/evm/tokens', params: { chain_id: 8453 } },
+        { apiPath: '/api/v1/evm/tokens', params: { chain_id: 1 } },
+      ]);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it('falls back to bundled tools when runtime metadata loading fails', async () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const server = createCambrianMcpServer({

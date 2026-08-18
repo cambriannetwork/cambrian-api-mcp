@@ -9,6 +9,19 @@ for those.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-08-18
+
+### Added
+
+- Added dynamic `cambrian_ethereum_*` tools for visible EVM operations that
+  advertise `chain_id=1` in the active OpenAPI schema.
+
+### Changed
+
+- Fixed Base tools to `chain_id=8453` and Ethereum tools to `chain_id=1`.
+- Updated to `cambrian@1.3.0` to preserve OpenAPI numeric enums during runtime
+  discovery.
+
 ## [1.3.7] - 2026-08-18
 
 ### Changed

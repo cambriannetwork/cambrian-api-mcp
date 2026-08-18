@@ -100,6 +100,7 @@ Tool names are canonical and prefixed with `cambrian_`.
 Examples:
 
 - `cambrian_base_dexes`
+- `cambrian_ethereum_dexes`
 - `cambrian_solana_price_current`
 - `cambrian_deep42_social_data_alpha_tweet_detection`
 - `cambrian_risk_perp_risk_engine`
@@ -116,6 +117,10 @@ rechecks that local cache for each tool-list/tool-call request, while OpenAPI
 network attempts are coalesced and limited to once per source every 15 minutes.
 If runtime discovery is unavailable, the installed bundled inventory remains
 available without changing existing tool names or schemas.
+
+Visible EVM operations that advertise `chain_id=1` also expose
+`cambrian_ethereum_*` tools. Base tools fix `chain_id` to `8453`. Ethereum
+tools fix it to `1`.
 
 ## Development
 
