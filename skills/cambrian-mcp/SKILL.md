@@ -1,6 +1,6 @@
 ---
 name: cambrian-mcp
-description: Use this skill to set up and use the Cambrian API MCP server. Covers Cambrian API key auth, hosted and local client config, the cambrian_* tool naming scheme, docs lookup, composite workflow tools, response limits, and error handling for Solana/Base DeFi, Deep42 social intelligence, and perpetual risk data.
+description: Use this skill to set up and use the Cambrian API MCP server. Covers Cambrian API key auth, hosted and local client config, the cambrian_* tool naming scheme, docs lookup, composite workflow tools, response limits, and error handling for Solana, Base, and Ethereum DeFi, Deep42 social intelligence, and perpetual risk data.
 ---
 
 `cambrian-api-mcp` is the Model Context Protocol server for the Cambrian API. It exposes the same product surface as the `cambrian` CLI to any MCP-capable agent runtime.
