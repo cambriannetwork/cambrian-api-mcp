@@ -9,6 +9,13 @@ for those.
 
 ## [Unreleased]
 
+## [1.3.6] - 2026-08-18
+
+### Fixed
+
+- The MCP Registry description now uses EVM instead of Base. This term covers
+  the supported EVM networks without naming one chain.
+
 ## [1.3.5] - 2026-08-08
 
 ### Changed
