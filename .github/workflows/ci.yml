@@ -49,7 +49,7 @@ jobs:
       - name: Verify package contents
         run: npm pack --dry-run
 
-      - name: Refresh skills.sh
+      - name: Submit skills.sh install event
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           refresh_dir="$(mktemp -d)"
