@@ -16,6 +16,15 @@ npm pack --dry-run
 
 Confirm the dry-run package includes `dist/index.js` and `dist/server.js`, and excludes `src/`, `tests/`, deployment workflows, Docker files, and `.env*` files.
 
+Before the public tag, deploy the same version through the private repository's
+normal CI/CD workflow. Confirm the hosted service reports that version:
+
+```bash
+version_under_test="$(node -p "require('./server.json').version")"
+hosted_version="$(curl --fail --silent https://mcp.cambrian.org/health | node -pe "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")"
+test "$hosted_version" = "$version_under_test"
+```
+
 ## Publish
 
 Confirm `NPM_TOKEN` and the `npm-production` environment are configured, then
@@ -28,8 +37,9 @@ git push origin main "$version"
 ```
 
 The tag-triggered release workflow repeats verification and publishes with npm
-provenance. It then publishes the matching MCP Registry version and creates the
-GitHub release. Do not publish npm or Registry metadata manually.
+provenance. It creates the GitHub release. It publishes the matching MCP
+Registry version only after the hosted health and authentication smoke passes.
+Do not publish npm or Registry metadata manually.
 
 Then verify:
 

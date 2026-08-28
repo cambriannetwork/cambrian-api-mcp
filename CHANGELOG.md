@@ -7,6 +7,15 @@ Releases before 1.3.0 predate this file; see the
 [GitHub releases](https://github.com/cambriannetwork/cambrian-api-mcp/releases)
 for those.
 
+## [1.5.1] - 2026-08-28
+
+### Changed
+
+- Updated the minimum `cambrian` dependency to `1.3.3`. Its Codex MCP
+  configuration command now prints valid hosted and local TOML.
+- MCP Registry publication now waits until the hosted health endpoint reports
+  the release version.
+
 ## [1.5.0] - 2026-08-28
 
 ### Added
