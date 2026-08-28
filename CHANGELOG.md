@@ -7,7 +7,98 @@ Releases before 1.3.0 predate this file; see the
 [GitHub releases](https://github.com/cambriannetwork/cambrian-api-mcp/releases)
 for those.
 
-## [Unreleased]
+## [1.5.0] - 2026-08-28
+
+### Added
+
+- Added `--toolsets` (env `CAMBRIAN_TOOLSETS`, HTTP `?toolsets=`) to load only
+  `solana`, `evm`, `deep42`, or `risk`. `cambrian_docs` stays in every
+  selection. A Solana-only client loads 37 tools and 10,766 bytes instead of
+  111 tools and 27,157 bytes.
+- Added `npm run registry:generate` and `npm run registry:check` for the
+  bundled offline registry.
+- Added progressive, compact, and full tool profiles for stdio and HTTP.
+- Added on-demand endpoint call cards and full documentation through
+  `cambrian_docs`.
+- Added an on-demand response-field documentation mode to `cambrian_docs`.
+- Added corrective validation results with the parameter, received value,
+  expected schema, and documentation hint.
+
+### Changed
+
+- Built the offline fallback from this package's own snapshot of the live
+  OpenAPI instead of the `cambrian` package's bundled registry. The published
+  `cambrian@1.3.1` registry had drifted: no `chain_id` numeric enum, so no
+  Ethereum tools projected at all; no exclusive numeric bounds; `token_address`
+  where the API had renamed to `token_addresses`; and six Solana endpoints the
+  API no longer serves. A clean install offline now lists 111 tools instead of
+  86.
+- Removed `offset`, `order_asc`, and `order_desc` from the progressive tool
+  list, and reduced `limit` to its type and maximum. Progressive `tools/list`
+  fell from 36,892 to 27,157 bytes. All three stay callable, and the server
+  instructions name them.
+- Advertised the Solana composite tool only when Solana tools are in scope.
+- Updated to `cambrian@1.3.2`, which parses `exclusiveMinimum` and
+  `exclusiveMaximum` from the live OpenAPI. The server no longer depends on
+  its snapshot to restore those bounds.
+- Regenerated the offline registry from the current OpenAPI. It adds
+  `cambrian_ethereum_lending_sparklend_pools` for 111 tools. The endpoint
+  declares Ethereum only, so no Base tool is projected for it.
+- Made progressive the default profile for the server factory, stdio, and the
+  hosted `/mcp` route.
+- Reduced default tool metadata while preserving direct endpoint tool names,
+  parameter names, types, required fields, scalar enums, OpenAPI defaults,
+  numeric bounds, and array item types.
+- Removed fixed `chain_id` inputs from direct Base and Ethereum tools. Each tool
+  now supplies its fixed chain value.
+- Made the compact call shape explicit. Endpoint arguments go inside the
+  `parameters` object.
+- Added explicit documentation status and trust metadata to full documentation
+  results.
+- Made the concise request schema the default `cambrian_docs` result in every
+  profile. Response fields and full prose remain explicit on-demand choices.
+
+### Fixed
+
+- Restored exclusive numeric bounds if the runtime OpenAPI parser drops them.
+  `cambrian@1.3.1` parsed no `exclusiveMinimum`/`exclusiveMaximum`, and the
+  runtime path takes priority over the bundled registry, so Risk
+  `entry_price: 0` reached the API and returned a raw 422 instead of a
+  corrective `BELOW_MINIMUM`. `cambrian@1.3.2` supplies the bounds; this
+  restore stays as a guard against an older resolved dependency.
+- Returned a short miss message from `cambrian_docs` instead of the whole
+  25 kB root index when an explicit path does not match.
+- Matched `cambrian_docs` query terms as whole words and dropped stopwords.
+  Substring scoring let fragments of a nonsense query ("no", "such") match
+  "known" or "such as" in endpoint descriptions, returning unrelated
+  endpoints instead of a miss.
+- Corrected `engines.node` to `>=20.0.0`. `cambrian` requires Node 20, and on
+  Node 18 every Streamable HTTP request failed with
+  `ReferenceError: crypto is not defined`.
+- Updated the Solana token snapshot to use the current token-details,
+  price-current, and price-volume paths and parameters.
+- Limited the token snapshot to two concurrent Solana requests. This prevents
+  partial HTTP 429 results while Deep42 continues in parallel.
+- Added validation for array item constraints.
+- Rejected objects and arrays for string parameters before an API call.
+- Accepted host-prefixed endpoint names in `cambrian_docs`.
+- Stopped converting CLI convenience values into MCP defaults. Required fields
+  and defaults now come from the OpenAPI request schema only.
+- Preserved exclusive OpenAPI numeric bounds in tool schemas and corrective
+  validation errors when the shared metadata package provides them.
+- Resolved indexed Risk paths to the canonical documentation page.
+- Stopped all active API requests when an HTTP client disconnects or a tool
+  reaches its timeout.
+- Stopped an upstream API request when its MCP tool call is cancelled. Other
+  concurrent tool calls continue.
+- Applied `_maxResponseLength` to structured API results. If a structured
+  result exceeds the limit, the server omits it and returns the bounded text
+  result instead.
+- Accepted finite numeric strings for `_maxResponseLength`. This keeps the
+  hidden Progressive control usable when an agent sends a string value.
+- Clarified that response-detail documentation also includes the OpenAPI
+  request schema. Agents no longer need full endpoint prose for both parts.
+- Corrected Codex stdio setup to forward `CAMBRIAN_API_KEY` with `env_vars`.
 
 ## [1.4.1] - 2026-08-18
 

@@ -29,14 +29,26 @@ export class ApiError extends Error {
  * per-tool timeout bound without waiting on a real 45 s clock.
  */
 let hangOpabinia = false;
+let useBoundaryFetch = false;
 export function setHangOpabinia(value: boolean): void {
   hangOpabinia = value;
 }
 
+export function setUseBoundaryFetch(value: boolean): void {
+  useBoundaryFetch = value;
+}
+
 export class CambrianData {
+  private readonly fetchFn: typeof globalThis.fetch;
+
+  constructor(opts: { fetch?: typeof globalThis.fetch } = {}) {
+    this.fetchFn = opts.fetch ?? globalThis.fetch;
+  }
+
   opabinia = {
     query: async (apiPath: string, params: Record<string, unknown> = {}) => {
       calls.push({ client: 'opabinia', apiPath, params });
+      if (useBoundaryFetch) return this.fetchFn(`https://opabinia.test${apiPath}`);
       if (hangOpabinia) return new Promise<never>(() => {});
       if (apiPath === '/api/v1/solana/latest-block') {
         return [{
@@ -52,6 +64,7 @@ export class CambrianData {
   deep42 = {
     query: async (apiPath: string, params: Record<string, unknown> = {}) => {
       calls.push({ client: 'deep42', apiPath, params });
+      if (useBoundaryFetch) return this.fetchFn(`https://deep42.test${apiPath}`);
       return { ok: true, client: 'deep42', apiPath, params };
     },
   };
@@ -59,6 +72,7 @@ export class CambrianData {
   risk = {
     query: async (apiPath: string, params: Record<string, unknown> = {}) => {
       calls.push({ client: 'risk', apiPath, params });
+      if (useBoundaryFetch) return this.fetchFn(`https://risk.test${apiPath}`);
       return { ok: true, client: 'risk', apiPath, params };
     },
   };
@@ -67,4 +81,5 @@ export class CambrianData {
 export function resetCalls(): void {
   calls.length = 0;
   hangOpabinia = false;
+  useBoundaryFetch = false;
 }

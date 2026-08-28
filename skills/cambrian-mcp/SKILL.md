@@ -19,6 +19,28 @@ The tool list is generated and changes as the API gains endpoints. Treat the liv
 
 Transports: stdio for local clients, Streamable HTTP for hosted and self-hosted deployments.
 
+## Tool Profiles
+
+Use the progressive profile unless the client has a specific constraint.
+
+- **Progressive (default)** — exposes each endpoint as a direct tool. Each tool
+  includes types, required fields, scalar enums, OpenAPI defaults, numeric
+  bounds, and array item types. Load patterns, large array enums, parameter
+  descriptions, and response fields with `cambrian_docs`.
+- **Compact** — advertises only `cambrian_docs`, `cambrian_call`, and
+  `cambrian_solana_token_snapshot`. Use it when a client cannot handle a large
+  tool list.
+- **Full** — exposes the same direct tools as progressive. It also includes full
+  parameter descriptions, defaults, constraints, and response-size controls.
+
+All profiles use the same progressive documentation flow. `cambrian_docs`
+returns the request schema by default. Use `detail: "response"` for response
+fields. Use `detail: "full"` for examples and all endpoint prose. The full
+profile does not preload response documentation for every endpoint.
+
+For stdio, select a profile with `--profile compact`, `--profile progressive`,
+or `--profile full`. For HTTP, use `/mcp/compact`, `/mcp`, or `/mcp/full`.
+
 ## Authentication
 
 Every call needs your own Cambrian API key. The hosted server and the local package both require the caller to supply one; neither ships nor proxies a shared key.
@@ -68,7 +90,13 @@ Claude / Cursor config file:
 }
 ```
 
-Codex uses the same shape under `mcp_servers` instead of `mcpServers`.
+Codex config uses TOML. For hosted HTTP, forward the key as a bearer token:
+
+```toml
+[mcp_servers.cambrian]
+url = "https://mcp.cambrian.org/mcp"
+bearer_token_env_var = "CAMBRIAN_API_KEY"
+```
 
 ### Local stdio
 
@@ -84,12 +112,24 @@ Codex uses the same shape under `mcp_servers` instead of `mcpServers`.
 }
 ```
 
+For Codex local stdio, allow it to forward the existing environment variable:
+
+```toml
+[mcp_servers.cambrian]
+command = "npx"
+args = ["-y", "cambrian-api-mcp"]
+env_vars = ["CAMBRIAN_API_KEY"]
+```
+
 Or run it directly:
 
 ```bash
 export CAMBRIAN_API_KEY=<your-api-key>
 npx -y cambrian-api-mcp
 ```
+
+The command above uses the progressive profile. Add `--profile compact` or
+`--profile full` only when the client needs another profile.
 
 ### Generate and test the config with the CLI
 
@@ -118,7 +158,9 @@ Bind `0.0.0.0` only in a real hosted deployment. `PORT`, `ALLOWED_ORIGINS`, `RAT
 
 ## Tool Naming
 
-Names are canonical and prefixed with `cambrian_`, then the service group and the resource with `_` separators. The pattern is stable even as the set of tools changes. For example:
+In the progressive and full profiles, names are canonical and prefixed with
+`cambrian_`. The service group and resource use `_` separators. The pattern is
+stable even as the tool set changes. For example:
 
 - `cambrian_solana_price_current`
 - `cambrian_solana_token_details`
@@ -128,7 +170,22 @@ Names are canonical and prefixed with `cambrian_`, then the service group and th
 - `cambrian_deep42_social_data_sentiment_shifts`
 - `cambrian_risk_perp_risk_engine`
 
-Do not guess a tool name. List tools, or call `cambrian_docs` with no `path` for the root endpoint index.
+Do not guess a tool name. List tools, or call `cambrian_docs` with no `path` for
+the root endpoint index. In the compact profile, use the documented endpoint
+path with `cambrian_call`.
+
+Use this exact compact call shape:
+
+```json
+{
+  "path": "solana/price-current",
+  "parameters": {
+    "token_address": "So11111111111111111111111111111111111111112"
+  }
+}
+```
+
+Put every endpoint argument inside `parameters`.
 
 ## Routing
 
@@ -142,11 +199,15 @@ Never send a Solana mint address to an EVM tool. Never send an EVM contract addr
 
 ## Use `cambrian_docs` Before Unfamiliar Endpoints
 
-Every endpoint tool's description ends with the docs path to call. `cambrian_docs` returns live parameter descriptions, units, constraints, and response-field meanings, so it never drifts from a cached tool list.
+Every endpoint tool's description ends with the docs path to call.
+`cambrian_docs` returns the request schema by default. This result includes
+required fields, defaults, constraints, units, and parameter descriptions.
+Request only the additional documentation that the task needs.
 
 ```json
 { "path": "solana/price-current" }
-{ "path": "evm/dexes" }
+{ "path": "evm/dexes", "detail": "response" }
+{ "path": "evm/dexes", "detail": "full" }
 { "path": "deep42/social-data/sentiment-shifts" }
 { "path": "guides/x402" }
 {}
@@ -154,7 +215,9 @@ Every endpoint tool's description ends with the docs path to call. `cambrian_doc
 
 Use `evm/...` documentation paths for Base and Ethereum tools. Omit `path` to
 return the root index of available endpoints and guides. Fetch an indexed guide
-with `guides/<slug>`.
+with `guides/<slug>`. Use `detail: "response"` only when response fields are
+necessary. This view also includes the request schema. Use `detail: "full"`
+only when examples or other endpoint prose are necessary.
 
 ## Composite Tools
 
@@ -172,23 +235,45 @@ Because partial failure does not fail the call, always check each section before
 
 ## Response Size
 
-Every tool accepts an optional `_maxResponseLength` (characters). Each tool's schema description states the current default; a request above the server's hard cap is clamped down, never rejected.
+`cambrian_docs` and compact `cambrian_call` expose an optional
+`_maxResponseLength` value in characters. Full-profile endpoint tools also
+expose it. A request above the server hard cap is clamped down, not rejected.
+
+The progressive profile omits this option from endpoint metadata to save
+tokens. Narrow the query when a progressive result is too large. Use the full
+profile only when the client must control this value directly.
 
 A truncated response ends with an explicit truncation notice naming the limit that was applied. When you see one, prefer narrowing the query (lower `limit`, tighter time window, fewer addresses) over raising `_maxResponseLength`.
+
+The server includes `structuredContent` only when its serialized value also
+fits the response limit. For a larger result, use the bounded text preview and
+narrow the query.
 
 ## Errors
 
 Failures come back as a structured object, never as a raw HTML error page:
 
 ```json
-{ "code": "RATE_LIMITED", "message": "...", "status": 429, "retryable": true }
+{
+  "error": {
+    "code": "BAD_REQUEST",
+    "reason": "ABOVE_MAXIMUM",
+    "parameter": "limit",
+    "received": 1001,
+    "expected": { "type": "integer", "minimum": 1, "maximum": 1000 },
+    "retryable": false
+  }
+}
 ```
+
+For `BAD_REQUEST`, use `expected` to correct the call. The server rejects the
+invalid value before it calls the data API.
 
 | Code | Status | What to do |
 | --- | --- | --- |
 | `AUTH_REQUIRED` | 401 | Ask the user to set a valid `CAMBRIAN_API_KEY`. Do not retry. |
 | `AUTH_FORBIDDEN` | 403 | Key lacks access to that service. Do not retry. |
-| `BAD_REQUEST` | 400/422 | Fix the arguments — call `cambrian_docs` for the correct parameter shape. |
+| `BAD_REQUEST` | 400/422 | Fix the argument from `expected`. Use `cambrian_docs` if more detail is necessary. |
 | `NOT_FOUND` | 404 | Address or resource does not exist. Verify the address; do not substitute another. |
 | `RATE_LIMITED` | 429 | Retryable. Back off, then retry. |
 | `TIMEOUT` | 408 | Retryable. Narrow the query and retry. |

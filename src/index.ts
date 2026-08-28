@@ -1,31 +1,46 @@
 #!/usr/bin/env node
 
 import { realpathSync } from 'node:fs';
-import express, { type Request, type Response } from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { createHash } from 'crypto';
 import { pathToFileURL } from 'url';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { baseServerInstructions, createCambrianMcpServer, listMcpTools, SERVER_NAME, SERVER_VERSION } from './server.js';
+import {
+  baseServerInstructions,
+  createCambrianMcpServer,
+  listCompactMcpTools,
+  listMcpTools,
+  listProgressiveMcpTools,
+  parseToolsets,
+  SERVER_NAME,
+  SERVER_VERSION,
+  TOOLSETS,
+  type Toolset,
+} from './server.js';
 
 const DEFAULT_PORT = 8080;
 const DEFAULT_HTTP_HOST = '127.0.0.1';
 
 interface CliOptions {
   transport: 'stdio' | 'http';
+  profile: 'compact' | 'progressive' | 'full';
   host: string;
   port: number;
+  toolsets: Toolset[];
   help: boolean;
   version: boolean;
 }
 
-function parseArgs(argv: string[]): CliOptions {
+export function parseArgs(argv: string[]): CliOptions {
   const options: CliOptions = {
     transport: 'stdio',
+    profile: 'progressive',
     host: DEFAULT_HTTP_HOST,
     port: Number.parseInt(process.env.PORT ?? '', 10) || DEFAULT_PORT,
+    toolsets: parseToolsets(process.env.CAMBRIAN_TOOLSETS),
     help: false,
     version: false,
   };
@@ -43,11 +58,22 @@ function parseArgs(argv: string[]): CliOptions {
       case '--host':
         options.host = argv[++index] ?? options.host;
         break;
+      case '--profile': {
+        const value = argv[++index];
+        if (value !== 'compact' && value !== 'progressive' && value !== 'full') {
+          throw new Error('--profile must be one of: compact, progressive, full');
+        }
+        options.profile = value;
+        break;
+      }
       case '--port':
         options.port = Number.parseInt(argv[++index] ?? '', 10);
         if (!Number.isInteger(options.port) || options.port < 1) {
           throw new Error('--port must be a positive integer');
         }
+        break;
+      case '--toolsets':
+        options.toolsets = parseToolsets(argv[++index]);
         break;
       case '--help':
       case '-h':
@@ -64,6 +90,11 @@ function parseArgs(argv: string[]): CliOptions {
   return options;
 }
 
+export function mcpProfileForPath(path: string): CliOptions['profile'] {
+  if (path === '/mcp/compact') return 'compact';
+  return path === '/mcp/full' ? 'full' : 'progressive';
+}
+
 function usage(): string {
   return [
     `${SERVER_NAME} ${SERVER_VERSION}`,
@@ -74,8 +105,11 @@ function usage(): string {
     '',
     'Options:',
     '  --transport <stdio|http>   Transport mode. Default: stdio.',
+    '  --profile <compact|progressive|full>   Stdio tool profile. HTTP uses the endpoint path. Default: progressive.',
     `  --host <host>              HTTP host. Default: ${DEFAULT_HTTP_HOST}. Use 0.0.0.0 only in hosted deployments.`,
     `  --port <port>              HTTP port. Default: ${DEFAULT_PORT}.`,
+    `  --toolsets <list>          Comma list of ${TOOLSETS.join(', ')}, or all. Default: all.`,
+    '                             Env: CAMBRIAN_TOOLSETS. HTTP: ?toolsets=solana,risk.',
     '  --version                  Print version.',
     '  --help                     Show help.',
     '',
@@ -138,6 +172,22 @@ export function validateOrigin(req: Request, res: Response): boolean {
   return false;
 }
 
+function validateMcpAccess(req: Request, res: Response, next: NextFunction): void {
+  if (!validateOrigin(req, res)) return;
+  if (extractApiKey(req)) {
+    next();
+    return;
+  }
+  res.status(401).json({
+    jsonrpc: '2.0',
+    error: {
+      code: -32001,
+      message: 'CAMBRIAN_API_KEY required. Provide Authorization: Bearer <key> or X-Cambrian-Api-Key.',
+    },
+    id: null,
+  });
+}
+
 export function createCorsOptions(): cors.CorsOptions {
   return {
     origin: (origin, callback) => {
@@ -149,7 +199,7 @@ export function createCorsOptions(): cors.CorsOptions {
   };
 }
 
-async function runStdio(): Promise<void> {
+async function runStdio(profile: CliOptions['profile'], toolsets: Toolset[]): Promise<void> {
   const apiKey = process.env.CAMBRIAN_API_KEY;
   if (!apiKey) {
     console.error('CAMBRIAN_API_KEY is required for stdio mode.');
@@ -157,11 +207,11 @@ async function runStdio(): Promise<void> {
     return;
   }
   const instructions = baseServerInstructions();
-  const server = createCambrianMcpServer({ apiKey, instructions });
+  const server = createCambrianMcpServer({ apiKey, instructions, profile, toolsets });
   await server.connect(new StdioServerTransport());
 }
 
-async function runHttp(options: CliOptions): Promise<void> {
+export function createHttpApp(): express.Express {
   const app = express();
   app.set('trust proxy', 1);
 
@@ -192,7 +242,9 @@ async function runHttp(options: CliOptions): Promise<void> {
       server: SERVER_NAME,
       version: SERVER_VERSION,
       authMode: 'api-key',
-      toolCount: listMcpTools().length,
+      toolCount: listProgressiveMcpTools().length,
+      compactToolCount: listCompactMcpTools().length,
+      fullToolCount: listMcpTools().length,
       transport: 'streamable-http',
     });
   });
@@ -201,51 +253,107 @@ async function runHttp(options: CliOptions): Promise<void> {
     res.json({
       service: SERVER_NAME,
       version: SERVER_VERSION,
+      defaultProfile: 'progressive',
       mcpEndpoint: '/mcp',
+      compactMcpEndpoint: '/mcp/compact',
+      fullMcpEndpoint: '/mcp/full',
       auth: 'Cambrian API key via Authorization: Bearer <key> or X-Cambrian-Api-Key',
-      toolCount: listMcpTools().length,
+      toolCount: listProgressiveMcpTools().length,
+      progressiveToolCount: listProgressiveMcpTools().length,
+      compactToolCount: listCompactMcpTools().length,
+      fullToolCount: listMcpTools().length,
     });
   });
 
-  app.post('/mcp', limiter, async (req: Request, res: Response) => {
-    if (!validateOrigin(req, res)) return;
-    const apiKey = extractApiKey(req);
-    if (!apiKey) {
-      res.status(401).json({
-        jsonrpc: '2.0',
-        error: {
-          code: -32001,
-          message: 'CAMBRIAN_API_KEY required. Provide Authorization: Bearer <key> or X-Cambrian-Api-Key.',
-        },
-        id: null,
+  app.post(
+    ['/mcp', '/mcp/compact', '/mcp/full'],
+    limiter,
+    validateMcpAccess,
+    express.json({ limit: '256kb' }),
+    async (req: Request, res: Response) => {
+      const apiKey = extractApiKey(req)!;
+      let toolsets: Toolset[];
+      try {
+        const raw = req.query.toolsets;
+        toolsets = parseToolsets(typeof raw === 'string' ? raw : undefined);
+      } catch (error) {
+        res.status(400).json({
+          jsonrpc: '2.0',
+          error: { code: -32602, message: (error as Error).message },
+          id: null,
+        });
+        return;
+      }
+
+      const requestController = new AbortController();
+      const server = createCambrianMcpServer({
+        apiKey,
+        instructions,
+        profile: mcpProfileForPath(req.path),
+        toolsets,
+        signal: requestController.signal,
       });
-      return;
-    }
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+      });
+      let closed = false;
+      const closeServer = (): void => {
+        if (closed) return;
+        closed = true;
+        requestController.abort();
+        void server.close().catch(() => undefined);
+      };
+      res.once('close', closeServer);
+      try {
+        await server.connect(transport);
+        await transport.handleRequest(req, res, req.body);
+      } catch {
+        closeServer();
+        if (!res.headersSent) {
+          res.status(500).json({
+            jsonrpc: '2.0',
+            error: { code: -32603, message: 'Internal server error.' },
+            id: null,
+          });
+        }
+      }
+    },
+  );
 
-    const server = createCambrianMcpServer({ apiKey, instructions });
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-    });
-    await server.connect(transport);
-    await transport.handleRequest(req, res);
-  });
-
-  app.get('/mcp', limiter, (req: Request, res: Response) => {
+  app.get(['/mcp', '/mcp/compact', '/mcp/full'], limiter, (req: Request, res: Response) => {
     if (!validateOrigin(req, res)) return;
     res.status(405).json({
-      error: 'Use POST /mcp for Streamable HTTP JSON-RPC requests.',
+      error: `Use POST ${req.path} for Streamable HTTP JSON-RPC requests.`,
     });
   });
 
   // Preflight must enforce the same origin policy as the real request,
   // otherwise the default cors() would reflect arbitrary origins.
-  app.options('/mcp', (req: Request, res: Response) => {
+  app.options(['/mcp', '/mcp/compact', '/mcp/full'], (req: Request, res: Response) => {
     if (!validateOrigin(req, res)) return;
     cors(corsOptions)(req, res, () => res.sendStatus(204));
   });
 
+  app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    const bodyError = error as { status?: number; type?: string };
+    const oversized = bodyError.type === 'entity.too.large' || bodyError.status === 413;
+    res.status(oversized ? 413 : 400).json({
+      jsonrpc: '2.0',
+      error: {
+        code: oversized ? -32600 : -32700,
+        message: oversized ? 'Request body is too large.' : 'Invalid JSON.',
+      },
+      id: null,
+    });
+  });
+
+  return app;
+}
+
+async function runHttp(options: CliOptions): Promise<void> {
+  const app = createHttpApp();
   app.listen(options.port, options.host, () => {
-    console.error(`${SERVER_NAME} listening on http://${options.host}:${options.port}/mcp`);
+    console.error(`${SERVER_NAME} listening on http://${options.host}:${options.port}/mcp (compact: /mcp/compact, full: /mcp/full)`);
   });
 }
 
@@ -260,7 +368,7 @@ async function main(): Promise<void> {
     return;
   }
   if (options.transport === 'stdio') {
-    await runStdio();
+    await runStdio(options.profile, options.toolsets);
   } else {
     await runHttp(options);
   }
