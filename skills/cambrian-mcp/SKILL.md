@@ -41,6 +41,19 @@ profile does not preload response documentation for every endpoint.
 For stdio, select a profile with `--profile compact`, `--profile progressive`,
 or `--profile full`. For HTTP, use `/mcp/compact`, `/mcp`, or `/mcp/full`.
 
+## Toolsets
+
+Load only the tool groups the task needs. The valid names are `solana`, `evm`,
+`deep42`, and `risk`. `cambrian_docs` stays in every selection, so an agent can
+still read documentation for a group it cannot call.
+
+For stdio, use `--toolsets solana,risk` or the `CAMBRIAN_TOOLSETS` environment
+variable. The flag wins over the variable. For HTTP, use `?toolsets=solana,risk`.
+An unknown name is an error that names the valid values.
+
+The full catalog is 111 tools. `solana` alone is 37 tools, `evm` is 69,
+`deep42` is 6, and `risk` is 2.
+
 ## Authentication
 
 Every call needs your own Cambrian API key. The hosted server and the local package both require the caller to supply one; neither ships nor proxies a shared key.
