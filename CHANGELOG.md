@@ -7,6 +7,55 @@ Releases before 1.3.0 predate this file; see the
 [GitHub releases](https://github.com/cambriannetwork/cambrian-api-mcp/releases)
 for those.
 
+## [1.6.0] - 2026-09-14
+
+### Added
+
+- Added Arbitrum (chain id `42161`) as a third EVM chain, alongside Base
+  (`8453`) and Ethereum (`1`). The 29 endpoints that declare `42161` in their
+  `chain_id` enum each expose a `cambrian_arbitrum_*` tool, pinned to
+  `chain_id=42161`. The catalog is now 141 tools; `--toolsets evm` loads 99.
+- Added a single `EVM_CHAINS` chain registry in `src/server.ts`. Chains are now
+  derived deterministically from each endpoint's own OpenAPI `chain_id` — its
+  `enum`, a fixed `minimum`/`maximum` pair, or an exclusive bound — instead of
+  two hardcoded constants. Everything downstream (tool names, descriptions,
+  `chain_id` pins, toolsets, server instructions, docs-path routing, and
+  validation) is computed from that registry, so adding a chain is one line plus
+  `npm run registry:generate`.
+- Added optional chain segments to `cambrian_docs` EVM paths, by id or slug:
+  `evm/42161/dexes`, `evm/arbitrum/dexes`, and `evm/dexes` all resolve the same
+  endpoint, with the chain-scoped forms returning that chain's pinned schema.
+- Added `.claude/skills/adding-a-chain/SKILL.md` with the deterministic
+  procedure, verification commands, and checklist for adding a future chain.
+
+### Changed
+
+- Regenerated the bundled offline registry so the fallback snapshot carries
+  `chain_id` values `[1, 8453, 42161]` rather than `[1, 8453]`.
+- `loadRuntimeMetadata` and `callCambrianTool` now derive their EVM metadata
+  groups and API routing from `EVM_CHAINS` instead of naming `base` directly.
+- Kept `package-lock.json`'s root version aligned with `package.json`; the
+  lockfile still declared `1.5.1` after the 1.5.1 release.
+
+### Security
+
+- Cleared five advisories that blocked the `npm audit --audit-level=moderate`
+  CI gate by refreshing transitive dependencies inside their existing declared
+  ranges: `express` 4.22.2 to 4.22.3, `qs` 6.15.3 to 6.16.0, `body-parser`
+  1.20.6 to 1.20.8, `hono` 4.13.0 to 4.13.7, `fast-uri` 3.1.5 to 3.1.7, and
+  `vitest`/`@vitest/mocker` 4.1.8 to 4.1.11. No declared range, source file, or
+  tool behavior changed; 15 packages moved in the lockfile. This touches the
+  HTTP transport, so the local stdio and HTTP smokes were re-run after the
+  update. The advisories were already present at 1.5.1 and are unrelated to the
+  Arbitrum work; they are included because CI audits every release.
+
+### Note
+
+- Adding Arbitrum removes no tool and changes no existing tool name, schema, or
+  behavior. Compared with 1.5.1, the catalog gains exactly 29 tools and loses
+  none; the only pre-existing tool whose description changed is `cambrian_docs`,
+  which now also documents chain-scoped EVM paths.
+
 ## [1.5.1] - 2026-08-28
 
 ### Changed

@@ -42,14 +42,14 @@ it is how an agent bounds a response.
 
 ## Toolsets
 
-The whole catalog is 111 tools. An agent that only asks about Solana still pays
-for 69 EVM tools it will never call. Use `--toolsets` to load only what you
+The whole catalog is 141 tools. An agent that only asks about Solana still pays
+for 99 EVM tools it will never call. Use `--toolsets` to load only what you
 need.
 
 | Toolset | Tools |
 | --- | --- |
 | `solana` | `cambrian_solana_*` and the Solana token snapshot |
-| `evm` | `cambrian_base_*` and `cambrian_ethereum_*` |
+| `evm` | `cambrian_base_*`, `cambrian_ethereum_*`, and `cambrian_arbitrum_*` |
 | `deep42` | `cambrian_deep42_*` |
 | `risk` | `cambrian_risk_*` |
 
@@ -67,9 +67,9 @@ Progressive `tools/list` sizes:
 
 | Selection | Tools | Bytes |
 | --- | --- | --- |
-| default (all) | 111 | 27,157 |
-| `evm` | 69 | 15,759 |
-| `solana` | 37 | 10,766 |
+| default (all) | 141 | 33,869 |
+| `evm` | 99 | 22,471 |
+| `solana` | 37 | 10,904 |
 | `deep42` | 6 | 3,663 |
 | `risk` | 2 | 2,093 |
 
@@ -198,6 +198,7 @@ Examples:
 
 - `cambrian_base_dexes`
 - `cambrian_ethereum_dexes`
+- `cambrian_arbitrum_dexes`
 - `cambrian_solana_price_current`
 - `cambrian_deep42_social_data_alpha_tweet_detection`
 - `cambrian_risk_perp_risk_engine`
@@ -219,9 +220,31 @@ regenerated with `npm run registry:generate`), not the `cambrian` package's
 bundled registry, so the offline catalog does not drift with that package's
 release cadence.
 
-Visible EVM operations that advertise `chain_id=1` also expose
-`cambrian_ethereum_*` tools. Base tools fix `chain_id` to `8453`. Ethereum
-tools fix it to `1`.
+The API serves one generic `/api/v1/evm/*` surface whose `chain_id` parameter
+lists the chains each endpoint supports. The MCP turns that into one fixed-chain
+tool per supported chain, so an agent never has to remember a magic number and
+cannot aim an endpoint at a chain it rejects:
+
+| Chain | Id | Tool prefix |
+| --- | --- | --- |
+| Base | `8453` | `cambrian_base_*` |
+| Ethereum | `1` | `cambrian_ethereum_*` |
+| Arbitrum | `42161` | `cambrian_arbitrum_*` |
+
+A tool appears for a chain if and only if that endpoint's own `chain_id` schema
+allows the chain — from its `enum`, a fixed `minimum`/`maximum` pair, or an
+exclusive bound. No allowlist and no per-endpoint special case: an endpoint the
+API widens to `enum: [1, 8453, 42161]` gains Arbitrum tools on the next metadata
+load with no MCP change. Base tools fix `chain_id` to `8453`, Ethereum tools to
+`1`, and Arbitrum tools to `42161`.
+
+`cambrian_docs` accepts an optional chain segment in an EVM path, by id or slug:
+`evm/42161/dexes`, `evm/arbitrum/dexes`, and `evm/dexes` all resolve the same
+endpoint, with the chain-scoped forms returning that chain's pinned schema.
+
+The chain registry lives in `EVM_CHAINS` in `src/server.ts` and is the only
+place a chain is declared. To add a chain, add one entry there and run
+`npm run registry:generate`; see `.claude/skills/adding-a-chain/SKILL.md`.
 
 ## Development
 

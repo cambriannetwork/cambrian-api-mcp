@@ -22,52 +22,179 @@ const listRuntimeMetadataTools = listCambrianMetadataTools as unknown as (
   metadata: Record<CambrianGroup, CambrianMetadataGroup>,
 ) => CambrianToolMetadata[];
 
-const BASE_CHAIN_ID = 8453;
-const ETHEREUM_CHAIN_ID = 1;
-
-function supportsChain(param: ParamSpec, chainId: number): boolean {
-  return param.numericEnum?.includes(chainId) === true ||
-    (param.min === chainId && param.max === chainId);
+/**
+ * Every EVM chain this server exposes, in catalog order.
+ *
+ * This table is the ONLY place a chain is declared. A tool is projected for a
+ * chain when — and only when — that chain's id is an allowed value of the
+ * tool's own `chain_id` parameter, which is read from the OpenAPI-derived
+ * metadata (see `evmChainIds`). Adding a chain here is therefore enough: the
+ * projection, tool names, descriptions, instruction prose, and toolsets all
+ * follow from it. See `.claude/skills/adding-a-chain/SKILL.md`.
+ *
+ * `sourceGroup` is the metadata group the endpoints live under. The API serves
+ * every EVM endpoint under the single `evm` apiGroup that the `cambrian` client
+ * models as the legacy group name `base`; a future EVM apiGroup that reports a
+ * different group name gets its own entry pointing at that name, with no other
+ * change.
+ */
+export interface EvmChain {
+  /** Canonical EVM chain id used in `chain_id`. */
+  id: number;
+  /** Snake-case machine name used in tool names: `cambrian_<slug>_*`. */
+  slug: string;
+  /** Display name used in tool descriptions. */
+  label: string;
+  /** Metadata group that carries this chain's endpoints. */
+  sourceGroup: CambrianGroup;
+  /**
+   * True for the group's own tools, which keep their original names instead of
+   * being renamed. Exactly one chain per sourceGroup must set this, and it must
+   * be the chain the API already defaults `chain_id` to (asserted in tests).
+   */
+  primary?: boolean;
+  /** Alternate spellings accepted by `cambrian_docs` path/tool lookup. */
+  aliases?: readonly string[];
 }
 
+export const EVM_CHAINS: readonly EvmChain[] = [
+  { id: 8453, slug: 'base', label: 'Base', sourceGroup: 'base', primary: true },
+  { id: 1, slug: 'ethereum', label: 'Ethereum', sourceGroup: 'base', aliases: ['eth', 'mainnet'] },
+  { id: 42161, slug: 'arbitrum', label: 'Arbitrum', sourceGroup: 'base', aliases: ['arb'] },
+];
+
+export function chainById(chainId: number): EvmChain | undefined {
+  return EVM_CHAINS.find((chain) => chain.id === chainId);
+}
+
+export function chainBySlug(slug: string): EvmChain | undefined {
+  const needle = slug.trim().toLowerCase();
+  return EVM_CHAINS.find((chain) =>
+    chain.slug === needle || chain.aliases?.includes(needle) === true);
+}
+
+/** Chain slugs in catalog order, for prose and toolset prefixes. */
+export function chainSlugs(): string[] {
+  return EVM_CHAINS.map((chain) => chain.slug);
+}
+
+/** Human-readable chain list, e.g. `Base, Ethereum, and Arbitrum`. */
+export function chainLabels(): string {
+  const labels = EVM_CHAINS.map((chain) => chain.label);
+  if (labels.length <= 1) return labels.join('');
+  return `${labels.slice(0, -1).join(', ')}, and ${labels[labels.length - 1]}`;
+}
+
+/** True when the metadata group carries EVM endpoints this server projects. */
+export function groupIsProjected(group: CambrianGroup): boolean {
+  return EVM_CHAINS.some((chain) => chain.sourceGroup === group);
+}
+
+/**
+ * Does this endpoint's own `chain_id` parameter allow `chainId`?
+ *
+ * The check is purely structural — it reads only values the OpenAPI declares, so
+ * it cannot drift from the spec:
+ *  - a `numericEnum` (OpenAPI `enum: [1, 8453, 42161]`) that contains the id;
+ *  - an inclusive fixed point (`minimum` === `maximum` === id), e.g. SparkLend
+ *    declaring `min=max=1`;
+ *  - an `exclusiveMin`/`exclusiveMax` interval that `id` falls inside, for the
+ *    case where the API bounds a chain with strict inequalities instead of an
+ *    enum.
+ */
+export function supportsChain(param: ParamSpec, chainId: number): boolean {
+  if (param.numericEnum?.includes(chainId) === true) return true;
+  if (param.min === chainId && param.max === chainId) return true;
+  if (param.min !== undefined && param.max !== undefined
+    && param.min > param.max) return false;
+  const insideMin = param.exclusiveMin === undefined || chainId > param.exclusiveMin;
+  const insideMax = param.exclusiveMax === undefined || chainId < param.exclusiveMax;
+  const hasExclusiveBound = param.exclusiveMin !== undefined || param.exclusiveMax !== undefined;
+  return hasExclusiveBound && insideMin && insideMax;
+}
+
+/**
+ * The chain ids an EVM tool advertises, read from its own `chain_id` parameter.
+ *
+ * Returns `null` when the tool has no `chain_id` parameter: such an endpoint is
+ * chain-agnostic (or Solana-shaped) and must never be projected per chain.
+ */
+export function evmChainIds(tool: CambrianToolMetadata): number[] | null {
+  const param = tool.params.find((candidate) => candidate.name === 'chain_id');
+  if (!param) return null;
+  return EVM_CHAINS.filter((chain) => supportsChain(param.spec, chain.id)).map((chain) => chain.id);
+}
+
+/**
+ * Project every EVM tool onto the chains its own schema advertises.
+ *
+ * The API serves one `/api/v1/evm/*` surface whose `chain_id` enum lists the
+ * chains an endpoint actually supports, and the MCP turns that into one
+ * fixed-chain tool per supported chain so an agent never has to remember a
+ * magic number and can never aim an endpoint at a chain it rejects. A tool that
+ * names several chains yields several tools; a tool that names one yields one;
+ * a tool with no `chain_id` is passed through untouched.
+ *
+ * Names follow `cambrian_<chain-slug>_<resource>`, except for the group's
+ * primary chain, which keeps the unrenamed original.
+ */
 export function projectEvmTools(tools: readonly CambrianToolMetadata[]): CambrianToolMetadata[] {
   return tools.flatMap((tool) => {
-    if (tool.group !== 'base') return [tool];
+    const sourceChains = EVM_CHAINS.filter((chain) => chain.sourceGroup === tool.group);
+    if (sourceChains.length === 0) return [tool];
     const chain = tool.params.find((param) => param.name === 'chain_id');
-    const project = (chainId: number, ethereum = false): CambrianToolMetadata | null => {
-      if ((!chain && ethereum) || (chain && !supportsChain(chain.spec, chainId))) return null;
-      if (!chain) return tool;
+    const project = (target: EvmChain): CambrianToolMetadata | null => {
+      if (!chain) {
+        // No chain_id: the endpoint is chain-agnostic. Only the primary chain of
+        // the group keeps its tool, so the catalog does not gain duplicates that
+        // would all call the identical endpoint.
+        return target.primary || sourceChains.length === 1 ? tool : null;
+      }
+      if (!supportsChain(chain.spec, target.id)) return null;
       const { numericEnum: _numericEnum, ...spec } = chain.spec;
+      const renamed = target.primary !== true
+        ? {
+            name: tool.name.replace(new RegExp(`^cambrian_${tool.group}_`), `cambrian_${target.slug}_`),
+            description: tool.description.replace(
+              new RegExp(`(Cambrian )${tool.group}( )`, 'i'),
+              `$1${target.label}$2`,
+            ),
+          }
+        : {};
       return {
         ...tool,
-        ...(ethereum ? {
-          name: tool.name.replace(/^cambrian_base_/, 'cambrian_ethereum_'),
-          description: tool.description.replace('Cambrian base ', 'Cambrian Ethereum '),
-        } : {}),
+        ...renamed,
         params: tool.params.map((param) => param === chain ? {
           ...param,
-          spec: { ...spec, default: chainId, min: chainId, max: chainId },
+          spec: { ...spec, default: target.id, min: target.id, max: target.id },
         } : param),
       };
     };
-    return [project(BASE_CHAIN_ID), project(ETHEREUM_CHAIN_ID, true)]
+    return sourceChains
+      .map(project)
       .filter((candidate): candidate is CambrianToolMetadata => candidate !== null);
   });
 }
 
 /**
  * Toolsets are the agent-facing grouping, which is not the same as the API
- * group: `base` projects into both Base and Ethereum tools, so `evm` covers
- * both. Naming them after what an agent asks for ("I need Solana data") is the
- * point -- see github-mcp-server's `--toolsets`, which exists for the same
- * reason: fewer, more relevant tools improve tool choice as well as context.
+ * group: the one `base` metadata group projects into every chain in
+ * `EVM_CHAINS`, so `evm` covers all of them. Naming them after what an agent
+ * asks for ("I need Solana data") is the point -- see github-mcp-server's
+ * `--toolsets`, which exists for the same reason: fewer, more relevant tools
+ * improve tool choice as well as context.
  */
 export const TOOLSETS = ['solana', 'evm', 'deep42', 'risk'] as const;
 export type Toolset = typeof TOOLSETS[number];
 
+/** Chain tool prefixes for the `evm` toolset, derived from `EVM_CHAINS`. */
+export function evmToolPrefixes(): string[] {
+  return EVM_CHAINS.map((chain) => `cambrian_${chain.slug}_`);
+}
+
 const TOOLSET_PREFIX: Record<Toolset, readonly string[]> = {
   solana: ['cambrian_solana_'],
-  evm: ['cambrian_base_', 'cambrian_ethereum_'],
+  evm: evmToolPrefixes(),
   deep42: ['cambrian_deep42_'],
   risk: ['cambrian_risk_'],
 };
@@ -205,7 +332,16 @@ async function loadRuntimeMetadata(
     homedir,
     isTTY: false,
   };
-  const groups: CambrianGroup[] = ['solana', 'base', 'deep42', 'risk'];
+  // EVM source groups come from the chain registry, so declaring a chain under
+  // a new metadata group is enough to have that group loaded at runtime.
+  const groups: CambrianGroup[] = [
+    ...new Set<CambrianGroup>([
+      'solana',
+      ...EVM_CHAINS.map((chain) => chain.sourceGroup),
+      'deep42',
+      'risk',
+    ]),
+  ];
   const entries = await Promise.all(groups.map(async (group) => [
     group,
     (await schema.loadRuntimeMetadataGroup(group, runtime)).metadata,
@@ -322,13 +458,20 @@ function schemaForParam(param: McpParamSpec): JsonSchema {
   return schema;
 }
 
+/**
+ * True when `tool.name` is a fixed-chain projection, i.e. one this server gave
+ * a `cambrian_<chain-slug>_` prefix. Such a tool pins `chain_id` to one value,
+ * so the parameter is redundant for the caller and is hidden from the schema.
+ */
+export function isChainProjectedTool(tool: CambrianToolMetadata): boolean {
+  return EVM_CHAINS.some((chain) => tool.name.startsWith(`cambrian_${chain.slug}_`));
+}
+
 export function buildToolInputSchema(tool: CambrianToolMetadata, hideFixedChain = false): JsonSchema {
   const properties: Record<string, JsonSchema> = {};
   const required: string[] = [];
   for (const param of tool.params) {
-    if (hideFixedChain && param.name === 'chain_id' && (
-      tool.name.startsWith('cambrian_base_') || tool.name.startsWith('cambrian_ethereum_')
-    )) continue;
+    if (hideFixedChain && param.name === 'chain_id' && isChainProjectedTool(tool)) continue;
     properties[param.name] = schemaForParam(param.spec);
     if (param.spec.required === true && param.spec.default === undefined) required.push(param.name);
   }
@@ -360,13 +503,51 @@ export function docPathForTool(tool: CambrianToolMetadata): string {
  * - Strip leading/trailing slashes.
  * - Drop a leading `api/v1/` prefix.
  * - Alias a leading `base` segment to `evm` (first segment only).
+ * - Alias a per-chain segment to generic `evm, so an agent that names a chain
+ *   still resolves the underlying endpoint: `evm/8453/dexes`, `evm/arbitrum/dexes`,
+ *   and `8453/dexes` all normalize to `evm/dexes`.
+ *
+ * The chain alias is positional (first or second segment) because the API serves
+ * one generic EVM surface, not chain-scoped paths -- docs.cambrian.org documents
+ * `evm/dexes`, never `evm/42161/dexes`. Accepting both spellings costs nothing
+ * and removes the most likely agent mistake when it is told a chain by name.
  */
 export function normalizeDocPath(path: string): string {
   let p = path.trim().replace(/^\/+|\/+$/g, '');
   p = p.replace(/^api\/v1\//, '');
   // Alias first segment `base` -> `evm`.
   p = p.replace(/^base(\/|$)/, 'evm$1');
+  const segments = p.split('/');
+  const chainFor = (segment: string | undefined) => segment === undefined
+    ? undefined
+    : /^\d+$/.test(segment)
+      ? chainById(Number(segment))
+      : chainBySlug(segment);
+  if (segments[0] === 'evm' && chainFor(segments[1]) && segments.length > 2) {
+    // `evm/42161/dexes` -> `evm/dexes`.
+    p = ['evm', ...segments.slice(2)].join('/');
+  } else if (segments.length > 1 && chainFor(segments[0])) {
+    // `42161/dexes` / `arbitrum/dexes` -> `evm/dexes`.
+    p = ['evm', ...segments.slice(1)].join('/');
+  }
   return p;
+}
+
+/**
+ * Recover the chain a caller named in a docs path, if any.
+ *
+ * `evm/42161/dexes`, `evm/arbitrum/dexes`, and `42161/dexes` all name Arbitrum.
+ * Returns `undefined` for a generic path, so the group's primary chain tool is
+ * selected. Chain-scoped paths are an input convenience: the API has one
+ * chain-agnostic `evm/` surface, and `chain_id` is the only scoping knob.
+ */
+export function chainIdFromDocPath(path: string): number | undefined {
+  const segments = path.trim().replace(/^\/+|\/+$/g, '').replace(/^api\/v1\//, '').split('/');
+  const candidate = segments[0] === 'evm' ? segments[1] : segments[0];
+  if (!candidate) return undefined;
+  return /^\d+$/.test(candidate)
+    ? chainById(Number(candidate))?.id
+    : chainBySlug(candidate)?.id;
 }
 
 /** Build the per-endpoint llms.txt URL from a normalized doc path. */
@@ -404,7 +585,7 @@ export function baseServerInstructions(): string {
     `Do not guess endpoint paths. Send only one of path, tool_name, or query. ` +
     `The root index also lists live guides; fetch any with path "guides/<slug>" ` +
     `(for example, "guides/x402"). ` +
-    `Use "evm/..." documentation paths for Base and Ethereum tools.`
+    `Use "evm/..." documentation paths for ${chainLabels()} tools.`
   );
 }
 
@@ -516,12 +697,12 @@ function docsToolDefinition() {
     name: DOCS_TOOL_NAME,
     description:
       'Get Cambrian API documentation from docs.cambrian.org/llms.txt. ' +
-      'Provide an endpoint or guide path (e.g. "solana/price-current", "evm/dexes", ' +
+      'Provide an endpoint or guide path (e.g. "solana/price-current", "evm/dexes", "evm/42161/dexes", ' +
       '"deep42/social-data/sentiment-shifts", "guides/x402"). Endpoint detail defaults to the request schema. ' +
       'Use detail="response" for response fields or detail="full" for examples and all endpoint prose. ' +
       'Every endpoint detail includes the OpenAPI request schema, so do not use full only to get request fields. ' +
       'Use "guides/<slug>" for any guide listed in the live root index. ' +
-      'Use `evm` endpoint paths for Base and Ethereum tools. ' +
+      `Use \`evm\` endpoint paths for ${chainLabels()} tools. ` +
       'Use tool_name when you know the exact MCP endpoint tool. ' +
       'If the exact path and tool name are unknown, use query only. ' +
       'Send only one of path, tool_name, or query. ' +
@@ -534,6 +715,8 @@ function docsToolDefinition() {
           description:
             'Endpoint path to fetch docs for. E.g. "solana/price-current", ' +
             '"evm/dexes", "deep42/social-data/sentiment-shifts". ' +
+            'Prefix an EVM path with a chain to scope it: "evm/8453/dexes", ' +
+            '"evm/1/dexes", or "evm/42161/dexes". ' +
             'Omit for the root llms.txt index.',
         },
         query: {
@@ -1152,10 +1335,12 @@ export async function callCambrianTool(
   args: Record<string, unknown>,
 ): Promise<unknown> {
   const params = validateAndBuildParams(tool, args);
+  // Opabinia serves Solana and every EVM chain; the chain registry decides which
+  // metadata groups route here, so a new EVM source group needs no change.
+  if (tool.group === 'solana' || groupIsProjected(tool.group)) {
+    return client.opabinia.query(tool.apiPath, params);
+  }
   switch (tool.group) {
-    case 'solana':
-    case 'base':
-      return client.opabinia.query(tool.apiPath, params);
     case 'deep42':
       return client.deep42.query(tool.apiPath, params as Record<string, string | number | boolean | undefined>);
     case 'risk':
@@ -1505,14 +1690,32 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
     getRawDataTools(requestFetch)
       .then(projectEvmTools)
       .then((tools) => filterToolsets(tools, options.toolsets));
+  /**
+   * Resolve a normalized docs path to a projected tool.
+   *
+   * Generic paths (`evm/dexes`) match the group's primary chain tool; a
+   * chain-scoped path (`evm/42161/dexes`) matches that chain's projection. Both
+   * are compared after `normalizeDocPath` has rewritten the chain segment away,
+   * so the chain is recovered from the original argument.
+   */
   const getToolByPath = async (
     path: string,
     requestFetch = fetchFn,
-  ): Promise<CambrianToolMetadata | undefined> =>
-    (await getRawDataTools(requestFetch)).find((candidate) => [
-      normalizeDocPath(docPathForTool(candidate)),
-      normalizeDocPath(`${candidate.apiGroup}/${candidate.resource}`),
-    ].includes(path));
+    chainId?: number,
+  ): Promise<CambrianToolMetadata | undefined> => {
+    const projected = projectEvmTools(await getRawDataTools(requestFetch));
+    const matches = (candidate: CambrianToolMetadata) => {
+      const docPath = normalizeDocPath(docPathForTool(candidate));
+      const groupPath = normalizeDocPath(`${candidate.apiGroup}/${candidate.resource}`);
+      return docPath === path || groupPath === path;
+    };
+    const candidates = projected.filter(matches);
+    if (chainId === undefined || candidates.length <= 1) return candidates[0];
+    const target = chainById(chainId);
+    const scoped = candidates.find((candidate) => target
+      && candidate.name.startsWith(`cambrian_${target.slug}_`));
+    return scoped ?? candidates[0];
+  };
   const server = new Server(
     { name: SERVER_NAME, version: SERVER_VERSION },
     {
@@ -1540,6 +1743,8 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
     const retrievedAt = new Date().toISOString();
     try {
       if (name === DOCS_TOOL_NAME) {
+        const rawPath = typeof args.path === 'string' ? args.path : '';
+        const requestedChain = chainIdFromDocPath(rawPath);
         let path = typeof args.path === 'string' ? normalizeDocPath(args.path) : '';
         const query = typeof args.query === 'string' ? args.query.trim() : '';
         const requestedToolName = typeof args.tool_name === 'string' ? args.tool_name.trim() : '';
@@ -1556,7 +1761,7 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
         let tool = toolName
           ? (await getDataTools(requestFetch)).find((candidate) => candidate.name === toolName)
           : path && !path.startsWith('guides/')
-            ? await getToolByPath(path, requestFetch)
+            ? await getToolByPath(path, requestFetch, requestedChain)
             : undefined;
         if (toolName && !tool) {
           throw new Error(`Unknown endpoint tool name: ${toolName}.`);
@@ -1683,7 +1888,8 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
             compactCallInputSchema(),
           );
         }
-        const path = typeof args.path === 'string' ? normalizeDocPath(args.path) : '';
+        const rawPath = typeof args.path === 'string' ? args.path : '';
+        const path = normalizeDocPath(rawPath);
         if (!path) throw new Error('Missing required parameter: path');
         if (args.parameters !== undefined && (
           typeof args.parameters !== 'object' || args.parameters === null || Array.isArray(args.parameters)
@@ -1698,7 +1904,7 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
           );
         }
         toolArgs = (args.parameters ?? {}) as Record<string, unknown>;
-        tool = await getToolByPath(path, requestFetch);
+        tool = await getToolByPath(path, requestFetch, chainIdFromDocPath(rawPath));
         if (!tool) {
           throw new Error(`Unknown endpoint path: ${path}. Use cambrian_docs with query only to find a valid path.`);
         }

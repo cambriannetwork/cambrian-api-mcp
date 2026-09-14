@@ -1,6 +1,6 @@
 ---
 name: cambrian-mcp
-description: Use this skill to set up and use the Cambrian API MCP server. Covers Cambrian API key auth, hosted and local client config, the cambrian_* tool naming scheme, docs lookup, composite workflow tools, response limits, and error handling for Solana, Base, and Ethereum DeFi, Deep42 social intelligence, and perpetual risk data.
+description: Use this skill to set up and use the Cambrian API MCP server. Covers Cambrian API key auth, hosted and local client config, the cambrian_* tool naming scheme, docs lookup, composite workflow tools, response limits, and error handling for Solana, Base, Ethereum, and Arbitrum DeFi, Deep42 social intelligence, and perpetual risk data.
 ---
 
 `cambrian-api-mcp` is the Model Context Protocol server for the Cambrian API. It exposes the same product surface as the `cambrian` CLI to any MCP-capable agent runtime.
@@ -11,7 +11,7 @@ Use this document to get connected and then to call tools well. If your runtime 
 
 Three kinds of tool:
 
-- **endpoint tools** — generated from API metadata for Solana, Base, Ethereum, Deep42, and perpetual risk
+- **endpoint tools** — generated from API metadata for Solana, Base, Ethereum, Arbitrum, Deep42, and perpetual risk
 - **composite workflow tools** — multi-endpoint reads in a single call, such as `cambrian_solana_token_snapshot`
 - **`cambrian_docs`** — live endpoint and guide documentation from `docs.cambrian.org/llms.txt`
 
@@ -179,6 +179,7 @@ stable even as the tool set changes. For example:
 - `cambrian_solana_token_details`
 - `cambrian_base_dexes`
 - `cambrian_ethereum_dexes`
+- `cambrian_arbitrum_dexes`
 - `cambrian_base_uniswap_v3_pool`
 - `cambrian_deep42_social_data_sentiment_shifts`
 - `cambrian_risk_perp_risk_engine`
@@ -205,6 +206,7 @@ Put every endpoint argument inside `parameters`.
 - Solana tokens, pools, prices, transactions → `cambrian_solana_*`
 - Base chain tokens, pools, TVL, prices → `cambrian_base_*`
 - Ethereum tokens, pools, TVL, prices → `cambrian_ethereum_*`
+- Arbitrum tokens, pools, TVL, prices, lending → `cambrian_arbitrum_*`
 - Social sentiment, alpha tweets, influencer credibility → `cambrian_deep42_*`
 - Perpetual position risk, liquidation, position sizing → `cambrian_risk_perp_risk_engine`
 
@@ -226,7 +228,7 @@ Request only the additional documentation that the task needs.
 {}
 ```
 
-Use `evm/...` documentation paths for Base and Ethereum tools. Omit `path` to
+Use `evm/...` documentation paths for Base, Ethereum, and Arbitrum tools, optionally chain-scoped (`evm/42161/dexes`). Omit `path` to
 return the root index of available endpoints and guides. Fetch an indexed guide
 with `guides/<slug>`. Use `detail: "response"` only when response fields are
 necessary. This view also includes the request schema. Use `detail: "full"`

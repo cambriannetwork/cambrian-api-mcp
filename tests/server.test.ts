@@ -12,12 +12,18 @@ import {
   DOCS_TOOL_NAME,
   DOCS_BASE_URL,
   DOCS_ROOT_URL,
+  EVM_CHAINS,
   MAX_RESPONSE_LENGTH_CAP,
   MAX_STRUCTURED_RECORDS,
   RISK_TOOL_TIMEOUT_MS,
   DEFAULT_TOOL_TIMEOUT_MS,
   SERVER_VERSION,
   baseServerInstructions,
+  chainById,
+  chainBySlug,
+  chainIdFromDocPath,
+  chainSlugs,
+  evmChainIds,
   buildToolInputSchema,
   buildToolResult,
   callCambrianTool,
@@ -104,8 +110,13 @@ describe('Cambrian MCP tools', () => {
       expect(JSON.stringify(tools)).not.toContain(`"${omitted}"`);
     }
     // Context budget. The full profile is ~130 kB; progressive must stay far
-    // under it or the profile has stopped earning its name.
-    expect(JSON.stringify(tools).length).toBeLessThan(28_000);
+    // under it or the profile has stopped earning its name. The ceiling tracks
+    // EVM_CHAINS: each extra chain in the registry adds its projected tools, so
+    // it is derived from the chain count rather than hardcoded to two chains.
+    const perChainBudget = 8_000;
+    const fixedBudget = 11_000;
+    expect(JSON.stringify(tools).length)
+      .toBeLessThan(fixedBudget + perChainBudget * EVM_CHAINS.length);
   });
 
   // The whole trim rests on this: omitting a parameter from the advertised
@@ -612,6 +623,170 @@ describe('bundled offline registry', () => {
       'cambrian_solana_meteora_dlmm_pool_multi',
     ]) expect(named(retired)).toBeUndefined();
     expect(named('cambrian_solana_price_volume')).toBeDefined();
+  });
+});
+
+/**
+ * The chain registry is the single source of truth for which chains exist.
+ * These tests are written against EVM_CHAINS rather than against Base/Ethereum/
+ * Arbitrum by name, so adding a chain to the registry is enough: the tests then
+ * assert the new chain's invariants automatically instead of needing edits.
+ * That property is the point -- see .claude/skills/adding-a-chain/SKILL.md.
+ */
+describe('EVM chain registry', () => {
+  const sourceTools = listRuntimeTools(OFFLINE_REGISTRY);
+  const tools = projectEvmTools(sourceTools);
+  const byName = (name: string) => tools.find((tool) => tool.name === name);
+  const evmSources = sourceTools.filter((tool) =>
+    EVM_CHAINS.some((chain) => chain.sourceGroup === tool.group));
+
+  it('declares a unique id and slug per chain, with one primary per source group', () => {
+    expect(new Set(EVM_CHAINS.map((chain) => chain.id)).size).toBe(EVM_CHAINS.length);
+    expect(new Set(EVM_CHAINS.map((chain) => chain.slug)).size).toBe(EVM_CHAINS.length);
+    for (const group of new Set(EVM_CHAINS.map((chain) => chain.sourceGroup))) {
+      expect(EVM_CHAINS.filter((chain) => chain.sourceGroup === group && chain.primary).length).toBe(1);
+    }
+  });
+
+  it('pins every primary chain to the chain_id the API already defaults to', () => {
+    // The primary chain keeps the group's original, unrenamed tool. If its id
+    // were not the spec's default, callers who omit chain_id would silently get
+    // a different chain than the primary tool advertises.
+    for (const chain of EVM_CHAINS.filter((candidate) => candidate.primary)) {
+      // Only endpoints that actually advertise more than one chain are relevant:
+      // a chain-exclusive endpoint (SparkLend, min=max=1) legitimately defaults to
+      // its one chain, and it never projects onto the primary.
+      const defaults = sourceTools
+        .filter((tool) => tool.group === chain.sourceGroup
+          && (evmChainIds(tool)?.length ?? 0) > 1)
+        .flatMap((tool) => tool.params)
+        .filter((param) => param.name === 'chain_id')
+        .map((param) => param.spec.default);
+      expect(defaults.length).toBeGreaterThan(0);
+      expect(new Set(defaults)).toEqual(new Set([chain.id]));
+    }
+  });
+
+  it('resolves chains by id, slug, and alias', () => {
+    expect(chainById(42161)?.slug).toBe('arbitrum');
+    expect(chainBySlug('arbitrum')?.id).toBe(42161);
+    expect(chainBySlug('ARB')?.id).toBe(42161);
+    expect(chainById(999999)).toBeUndefined();
+    expect(chainBySlug('dogechain')).toBeUndefined();
+    expect(chainSlugs()).toEqual(EVM_CHAINS.map((chain) => chain.slug));
+  });
+
+  it('projects exactly the chains each endpoint itself advertises', () => {
+    // The whole contract: a chain gets a tool if and only if the endpoint's own
+    // chain_id allows it. No allowlist, no per-endpoint special case.
+    for (const source of evmSources) {
+      const advertised = evmChainIds(source);
+      const sourceChains = EVM_CHAINS.filter((chain) => chain.sourceGroup === source.group);
+      const expected = advertised === null
+        ? sourceChains.filter((chain) => chain.primary).map((chain) => chain.slug)
+        : sourceChains.filter((chain) => advertised.includes(chain.id)).map((chain) => chain.slug);
+      const actual = tools
+        .filter((tool) => tool.resource === source.resource
+          && tool.group === source.group
+          && sourceChains.some((chain) =>
+            tool.name === source.name || tool.name.startsWith(`cambrian_${chain.slug}_`)))
+        .map((tool) => {
+          const match = sourceChains.find((chain) => tool.name.startsWith(`cambrian_${chain.slug}_`));
+          return match ? match.slug : tool.name;
+        });
+      expect(actual.sort()).toEqual(expected.sort());
+    }
+  });
+
+  it('exposes one Arbitrum tool per endpoint whose chain_id allows 42161', () => {
+    const arbitrumEndpoints = evmSources
+      .filter((tool) => evmChainIds(tool)?.includes(42161) === true)
+      .map((tool) => tool.resource);
+    const arbitrumTools = tools.filter((tool) => tool.name.startsWith('cambrian_arbitrum_'));
+    expect(arbitrumEndpoints.length).toBeGreaterThanOrEqual(29);
+    expect(arbitrumTools.map((tool) => tool.resource).sort())
+      .toEqual([...arbitrumEndpoints].sort());
+    // Spot-check the flagship endpoints an agent actually reaches for.
+    for (const resource of ['dexes', 'tokens', 'price-current', 'uniswap-v3-pools', 'tvl-status']) {
+      expect(byName(`cambrian_arbitrum_${resource.replace(/-/g, '_')}`)).toBeDefined();
+    }
+  });
+
+  it('never projects a chain an endpoint rejects', () => {
+    // Aero is Base-only (chain_id min=max=8453). Arbitrum and Ethereum twins
+    // would advertise a chain the API rejects, so they must not exist.
+    expect(byName('cambrian_base_aero_v2_pools')).toBeDefined();
+    expect(byName('cambrian_arbitrum_aero_v2_pools')).toBeUndefined();
+    expect(byName('cambrian_ethereum_aero_v2_pools')).toBeUndefined();
+    // SparkLend and Sky are Ethereum-only (min=max=1).
+    expect(byName('cambrian_ethereum_lending_sparklend_pools')).toBeDefined();
+    expect(byName('cambrian_arbitrum_lending_sparklend_pools')).toBeUndefined();
+  });
+
+  it('pins chain_id to the chain named in the tool, and hides it', () => {
+    for (const chain of EVM_CHAINS) {
+      for (const tool of tools.filter((candidate) =>
+        candidate.name.startsWith(`cambrian_${chain.slug}_`) && candidate.group === 'base')) {
+        const chainParam = tool.params.find((param) => param.name === 'chain_id');
+        if (!chainParam) continue;
+        expect({
+          tool: tool.name,
+          default: chainParam.spec.default,
+          min: chainParam.spec.min,
+          max: chainParam.spec.max,
+          enum: chainParam.spec.numericEnum,
+        }).toEqual({
+          tool: tool.name,
+          default: chain.id,
+          min: chain.id,
+          max: chain.id,
+          enum: undefined,
+        });
+        expect(buildToolInputSchema(tool, true).properties).not.toHaveProperty('chain_id');
+      }
+    }
+  });
+
+  it('keeps every projected chain id callable at the API path', async () => {
+    resetCalls();
+    const tool = byName('cambrian_arbitrum_dexes')!;
+    expect(tool).toBeDefined();
+    await callCambrianTool(new CambrianData({ apiKey: 'test' }), tool, {});
+    expect(calls.at(-1)).toMatchObject({
+      client: 'opabinia',
+      apiPath: '/api/v1/evm/dexes',
+      params: { chain_id: 42161 },
+    });
+  });
+
+  it('rejects a chain_id that contradicts the tool', () => {
+    const tool = byName('cambrian_arbitrum_dexes')!;
+    expect(() => validateAndBuildParams(tool, { chain_id: 8453 }))
+      .toThrow(/must be at least 42161/);
+    expect(validateAndBuildParams(tool, {})).toMatchObject({ chain_id: 42161 });
+  });
+
+  it('names the chain in each projected tool description', () => {
+    expect(byName('cambrian_arbitrum_dexes')?.description)
+      .toContain('Cambrian Arbitrum');
+    expect(byName('cambrian_ethereum_dexes')?.description)
+      .toContain('Cambrian Ethereum');
+    // The primary chain keeps the API's own wording.
+    expect(byName('cambrian_base_dexes')?.description).toContain('Cambrian base');
+  });
+
+  it('scopes cambrian_docs paths to a chain by id or slug', () => {
+    expect(normalizeDocPath('evm/42161/dexes')).toBe('evm/dexes');
+    expect(normalizeDocPath('evm/arbitrum/dexes')).toBe('evm/dexes');
+    expect(normalizeDocPath('42161/dexes')).toBe('evm/dexes');
+    expect(normalizeDocPath('evm/arb/dexes')).toBe('evm/dexes');
+    // Unrelated paths are untouched.
+    expect(normalizeDocPath('solana/price-current')).toBe('solana/price-current');
+    expect(normalizeDocPath('evm/dexes')).toBe('evm/dexes');
+    expect(chainIdFromDocPath('evm/42161/dexes')).toBe(42161);
+    expect(chainIdFromDocPath('evm/arbitrum/dexes')).toBe(42161);
+    expect(chainIdFromDocPath('evm/dexes')).toBeUndefined();
+    expect(chainIdFromDocPath('solana/price-current')).toBeUndefined();
   });
 });
 
@@ -1685,7 +1860,7 @@ describe('server instructions', () => {
               chain_id: {
                 required: false,
                 type: 'integer',
-                numericEnum: [1, 8453],
+                numericEnum: [1, 8453, 42161],
                 default: 8453,
                 strict: true,
               },
@@ -1709,13 +1884,26 @@ describe('server instructions', () => {
     try {
       await server.connect(serverTransport);
       await client.connect(clientTransport);
-      const docs = await client.callTool({
+      // A chain-scoped path resolves to that chain's projected tool, whose
+      // chain_id is pinned; the schema reports the pin rather than the raw enum.
+      const arbitrumDocs = await client.callTool({
+        name: DOCS_TOOL_NAME,
+        arguments: { path: 'evm/42161/dexes' },
+      });
+      expect(arbitrumDocs.structuredContent).toMatchObject({
+        inputSchema: { properties: { chain_id: { default: 42161, minimum: 42161, maximum: 42161 } } },
+      });
+
+      // A generic path resolves to the group's primary chain tool, pinned to the
+      // chain_id the API itself defaults to.
+      const baseDocs = await client.callTool({
         name: DOCS_TOOL_NAME,
         arguments: { path: 'evm/dexes' },
       });
-      expect(docs.structuredContent).toMatchObject({
-        inputSchema: { properties: { chain_id: { enum: [1, 8453] } } },
+      expect(baseDocs.structuredContent).toMatchObject({
+        inputSchema: { properties: { chain_id: { default: 8453, minimum: 8453, maximum: 8453 } } },
       });
+
       const result = await client.callTool({
         name: COMPACT_CALL_TOOL_NAME,
         arguments: { path: 'evm/dexes', parameters: { chain_id: 10 } },
@@ -1723,6 +1911,14 @@ describe('server instructions', () => {
 
       expect(result.isError).toBe(true);
       expect(calls).toHaveLength(callCount);
+
+      // The Arbitrum scope actually reaches the API on chain 42161.
+      const arbitrumCall = await client.callTool({
+        name: COMPACT_CALL_TOOL_NAME,
+        arguments: { path: 'evm/42161/dexes', parameters: {} },
+      });
+      expect(arbitrumCall.isError).not.toBe(true);
+      expect(calls.at(-1)).toMatchObject({ apiPath: '/api/v1/evm/dexes', params: { chain_id: 42161 } });
     } finally {
       await client.close();
       await server.close();
