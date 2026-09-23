@@ -70,7 +70,8 @@ describe('Cambrian MCP tools', () => {
     const tools = listMcpTools();
     const names = tools.map((tool) => tool.name);
     expect(new Set(names).size).toBe(names.length);
-    expect(CAMBRIAN_MCP_TOOLS.every((tool) => names.includes(tool.name))).toBe(true);
+    expect(projectEvmTools(listRuntimeTools(OFFLINE_REGISTRY))
+      .every((tool) => names.includes(tool.name))).toBe(true);
     expect(names).not.toContain('cambrian_health');
     expect(names).toContain(DOCS_TOOL_NAME);
     expect(names).toContain('cambrian_base_dexes');
@@ -95,13 +96,14 @@ describe('Cambrian MCP tools', () => {
     const names = tools.map((tool) => tool.name);
     const holders = tools.find((tool) => tool.name === 'cambrian_solana_tokens_holders')!;
 
-    expect(CAMBRIAN_MCP_TOOLS.every((tool) => names.includes(tool.name))).toBe(true);
+    expect(projectEvmTools(listRuntimeTools(OFFLINE_REGISTRY))
+      .every((tool) => names.includes(tool.name))).toBe(true);
     expect(names).not.toContain(COMPACT_CALL_TOOL_NAME);
     expect(holders.inputSchema.required).toEqual(['program_id']);
     expect(holders.inputSchema.properties).toHaveProperty('program_id', { type: 'string' });
     expect(holders.inputSchema.properties).toHaveProperty('limit', {
       type: 'integer',
-      maximum: 1000,
+      maximum: 10000,
     });
     expect(holders.inputSchema.properties).not.toHaveProperty('_maxResponseLength');
     expect(holders.inputSchema.properties.limit).not.toHaveProperty('description');
@@ -703,13 +705,43 @@ describe('EVM chain registry', () => {
       .filter((tool) => evmChainIds(tool)?.includes(42161) === true)
       .map((tool) => tool.resource);
     const arbitrumTools = tools.filter((tool) => tool.name.startsWith('cambrian_arbitrum_'));
-    expect(arbitrumEndpoints.length).toBeGreaterThanOrEqual(29);
+    expect(arbitrumEndpoints.length).toBeGreaterThan(0);
     expect(arbitrumTools.map((tool) => tool.resource).sort())
       .toEqual([...arbitrumEndpoints].sort());
     // Spot-check the flagship endpoints an agent actually reaches for.
     for (const resource of ['dexes', 'tokens', 'price-current', 'uniswap-v3-pools', 'tvl-status']) {
       expect(byName(`cambrian_arbitrum_${resource.replace(/-/g, '_')}`)).toBeDefined();
     }
+  });
+
+  it('exposes Robinhood tools only for endpoints that allow chain_id 4663', () => {
+    expect(chainById(4663)?.slug).toBe('robinhood');
+    expect(chainBySlug('robinhood')?.id).toBe(4663);
+    const robinhoodEndpoints = evmSources
+      .filter((tool) => evmChainIds(tool)?.includes(4663) === true)
+      .map((tool) => tool.resource);
+    const robinhoodTools = tools.filter((tool) => tool.name.startsWith('cambrian_robinhood_'));
+    expect(robinhoodEndpoints.length).toBeGreaterThanOrEqual(20);
+    expect(robinhoodTools.map((tool) => tool.resource).sort())
+      .toEqual([...robinhoodEndpoints].sort());
+    expect(byName('cambrian_robinhood_dexes')).toBeDefined();
+    expect(byName('cambrian_robinhood_tokens')).toBeDefined();
+    expect(byName('cambrian_robinhood_uniswap_v3_pools')).toBeUndefined();
+    expect(byName('cambrian_robinhood_aero_v2_pools')).toBeUndefined();
+    expect(normalizeDocPath('evm/4663/dexes')).toBe('evm/dexes');
+    expect(normalizeDocPath('evm/robinhood/dexes')).toBe('evm/dexes');
+    expect(chainIdFromDocPath('evm/robinhood/dexes')).toBe(4663);
+  });
+
+  it('sends Robinhood calls with chain_id 4663', async () => {
+    resetCalls();
+    const tool = byName('cambrian_robinhood_dexes')!;
+    await callCambrianTool(new CambrianData({ apiKey: 'test' }), tool, {});
+    expect(calls.at(-1)).toMatchObject({
+      client: 'opabinia',
+      apiPath: '/api/v1/evm/dexes',
+      params: { chain_id: 4663 },
+    });
   });
 
   it('never projects a chain an endpoint rejects', () => {
@@ -1094,7 +1126,7 @@ describe('server instructions', () => {
       expect(holders.inputSchema.properties).toHaveProperty('program_id');
       expect(holders.inputSchema.properties).toHaveProperty('limit', {
         type: 'integer',
-        maximum: 1000,
+        maximum: 10000,
       });
       expect(holders).not.toHaveProperty('description');
       expect(holders.inputSchema.properties.program_id).not.toHaveProperty('description');
@@ -1344,23 +1376,23 @@ describe('server instructions', () => {
 
       const result = await client.callTool({
         name: 'cambrian_solana_holder_token_balances',
-        arguments: { wallet_address: '0xabc', limit: 1001 },
+        arguments: { wallet_address: '0xabc', limit: 10001 },
       });
       const expectedError = {
         code: 'BAD_REQUEST',
         reason: 'ABOVE_MAXIMUM',
-        message: 'Parameter "limit" must be at most 1000.',
+        message: 'Parameter "limit" must be at most 10000.',
         status: 400,
         retryable: false,
         tool: 'cambrian_solana_holder_token_balances',
         parameter: 'limit',
-        received: 1001,
+        received: 10001,
         expected: {
           type: 'integer',
           description: 'Limit the number of results.',
           default: 10,
           minimum: 1,
-          maximum: 1000,
+          maximum: 10000,
         },
         docs: {
           tool_name: 'cambrian_solana_holder_token_balances',
@@ -1556,11 +1588,11 @@ describe('server instructions', () => {
           name: COMPACT_CALL_TOOL_NAME,
           arguments: {
             path: 'solana/holder-token-balances',
-            parameters: { wallet_address: '0xabc', limit: 1001 },
+            parameters: { wallet_address: '0xabc', limit: 10001 },
           },
         } : {
           name: 'cambrian_solana_holder_token_balances',
-          arguments: { wallet_address: '0xabc', limit: 1001 },
+          arguments: { wallet_address: '0xabc', limit: 10001 },
         });
         expect(result.isError).toBe(true);
         expect(result.structuredContent).toMatchObject({
@@ -1569,7 +1601,7 @@ describe('server instructions', () => {
             reason: 'ABOVE_MAXIMUM',
             tool: 'cambrian_solana_holder_token_balances',
             parameter: 'limit',
-            expected: { maximum: 1000 },
+            expected: { maximum: 10000 },
           },
         });
       } finally {

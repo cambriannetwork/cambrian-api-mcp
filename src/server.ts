@@ -61,6 +61,7 @@ export const EVM_CHAINS: readonly EvmChain[] = [
   { id: 8453, slug: 'base', label: 'Base', sourceGroup: 'base', primary: true },
   { id: 1, slug: 'ethereum', label: 'Ethereum', sourceGroup: 'base', aliases: ['eth', 'mainnet'] },
   { id: 42161, slug: 'arbitrum', label: 'Arbitrum', sourceGroup: 'base', aliases: ['arb'] },
+  { id: 4663, slug: 'robinhood', label: 'Robinhood Chain', sourceGroup: 'base' },
 ];
 
 export function chainById(chainId: number): EvmChain | undefined {

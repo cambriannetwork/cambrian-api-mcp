@@ -7,6 +7,22 @@ Releases before 1.3.0 predate this file; see the
 [GitHub releases](https://github.com/cambriannetwork/cambrian-api-mcp/releases)
 for those.
 
+## [1.7.0] - 2026-09-23
+
+### Added
+
+- Added Robinhood Chain mainnet (`4663`) to the EVM chain registry. The live
+  OpenAPI schema allows `4663` on 20 endpoints. Each endpoint now has a
+  `cambrian_robinhood_*` tool with a fixed `chain_id` of `4663`.
+
+### Changed
+
+- Updated the offline registry from the live OpenAPI schema. The API removed
+  two `clones-v3` endpoints and changed some Solana limits. Tests now
+  use the current limits and check the current endpoint catalog.
+- The offline catalog has 159 tools: 38 Base, 31 Ethereum, 27 Arbitrum,
+  and 20 Robinhood Chain tools. The `evm` toolset has 117 tools with docs.
+
 ## [1.6.0] - 2026-09-14
 
 ### Added
