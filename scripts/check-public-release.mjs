@@ -22,6 +22,9 @@ const forbiddenPaths = [
   text('claude-config-', 'example.md'),
   'Dockerfile',
   relPath(hidden('github'), 'workflows', 'deploy.yml'),
+  relPath(hidden('github'), 'workflows', 'pr.yml'),
+  relPath(hidden('github'), 'dependabot.yml'),
+  relPath('scripts', 'tool-diff'),
 ];
 
 const forbiddenTerms = [
@@ -133,7 +136,11 @@ if (existsSync(pkgPath)) {
   if (pkg.repository?.url !== publicRepo) fail(`package.json repository.url must be ${publicRepo}`);
   if (pkg.homepage !== publicHome) fail(`package.json homepage must be ${publicHome}`);
   if (pkg.bugs?.url !== publicBugs) fail(`package.json bugs.url must be ${publicBugs}`);
-  if (pkg.dependencies?.cambrian !== '^1.3.3') fail('package.json must depend on cambrian@^1.3.3');
+  // cambrian/tools needs >=1.8.0. Dependabot raises the range, so accept any later 1.x caret range.
+  const cambrianRange = /^\^1\.(\d+)\.\d+$/.exec(pkg.dependencies?.cambrian ?? '');
+  if (!cambrianRange || Number(cambrianRange[1]) < 8) {
+    fail('package.json must depend on cambrian with a caret range of ^1.8.0 or later 1.x');
+  }
   if (pkg.scripts?.ci !== 'npm test && npm run build') {
     fail('package.json scripts.ci must be "npm test && npm run build"');
   }

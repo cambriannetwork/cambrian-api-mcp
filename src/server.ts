@@ -9,60 +9,45 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { CambrianData, ApiError } from 'cambrian';
 import {
-  CAMBRIAN_MCP_TOOLS,
-  listCambrianTools as listCambrianMetadataTools,
+  CAMBRIAN_METADATA_GROUPS,
   type CambrianGroup,
   type CambrianMetadataGroup,
-  type CambrianToolMetadata,
-  type ParamSpec,
 } from 'cambrian/metadata';
-import { OFFLINE_REGISTRY } from './generated/offline-registry.js';
-
-const listRuntimeMetadataTools = listCambrianMetadataTools as unknown as (
-  metadata: Record<CambrianGroup, CambrianMetadataGroup>,
-) => CambrianToolMetadata[];
+import {
+  EVM_CHAINS as CLI_EVM_CHAINS,
+  ToolArgumentError as CliToolArgumentError,
+  buildToolQuery,
+  listCambrianCliTools,
+  paramJsonSchema,
+  toolInputSchema,
+  type CambrianTool,
+} from 'cambrian/tools';
 
 /**
- * Every EVM chain this server exposes, in catalog order.
- *
- * This table is the ONLY place a chain is declared. A tool is projected for a
- * chain when — and only when — that chain's id is an allowed value of the
- * tool's own `chain_id` parameter, which is read from the OpenAPI-derived
- * metadata (see `evmChainIds`). Adding a chain here is therefore enough: the
- * projection, tool names, descriptions, instruction prose, and toolsets all
- * follow from it. See `.claude/skills/adding-a-chain/SKILL.md`.
- *
- * `sourceGroup` is the metadata group the endpoints live under. The API serves
- * every EVM endpoint under the single `evm` apiGroup that the `cambrian` client
- * models as the legacy group name `base`; a future EVM apiGroup that reports a
- * different group name gets its own entry pointing at that name, with no other
- * change.
+ * EVM chains, derived from the `cambrian` CLI chain table. The CLI decides which
+ * tools exist for each chain (`listCambrianCliTools`); this table only feeds
+ * docs-path aliases, prose, and toolsets. `aliases` are extra spellings that
+ * `cambrian_docs` accepts in a path.
  */
 export interface EvmChain {
-  /** Canonical EVM chain id used in `chain_id`. */
   id: number;
-  /** Snake-case machine name used in tool names: `cambrian_<slug>_*`. */
   slug: string;
-  /** Display name used in tool descriptions. */
   label: string;
-  /** Metadata group that carries this chain's endpoints. */
   sourceGroup: CambrianGroup;
-  /**
-   * True for the group's own tools, which keep their original names instead of
-   * being renamed. Exactly one chain per sourceGroup must set this, and it must
-   * be the chain the API already defaults `chain_id` to (asserted in tests).
-   */
   primary?: boolean;
-  /** Alternate spellings accepted by `cambrian_docs` path/tool lookup. */
   aliases?: readonly string[];
 }
 
-export const EVM_CHAINS: readonly EvmChain[] = [
-  { id: 8453, slug: 'base', label: 'Base', sourceGroup: 'base', primary: true },
-  { id: 1, slug: 'ethereum', label: 'Ethereum', sourceGroup: 'base', aliases: ['eth', 'mainnet'] },
-  { id: 42161, slug: 'arbitrum', label: 'Arbitrum', sourceGroup: 'base', aliases: ['arb'] },
-  { id: 4663, slug: 'robinhood', label: 'Robinhood Chain', sourceGroup: 'base' },
-];
+const CHAIN_ALIASES: Record<number, readonly string[]> = { 1: ['eth', 'mainnet'], 42161: ['arb'] };
+
+export const EVM_CHAINS: readonly EvmChain[] = CLI_EVM_CHAINS.map((chain, index) => ({
+  id: chain.chainId,
+  slug: chain.command.replace(/-/g, '_'),
+  label: chain.label,
+  sourceGroup: chain.group,
+  ...(index === 0 ? { primary: true } : {}),
+  ...(CHAIN_ALIASES[chain.chainId] ? { aliases: CHAIN_ALIASES[chain.chainId] } : {}),
+}));
 
 export function chainById(chainId: number): EvmChain | undefined {
   return EVM_CHAINS.find((chain) => chain.id === chainId);
@@ -92,92 +77,6 @@ export function groupIsProjected(group: CambrianGroup): boolean {
 }
 
 /**
- * Does this endpoint's own `chain_id` parameter allow `chainId`?
- *
- * The check is purely structural — it reads only values the OpenAPI declares, so
- * it cannot drift from the spec:
- *  - a `numericEnum` (OpenAPI `enum: [1, 8453, 42161]`) that contains the id;
- *  - an inclusive fixed point (`minimum` === `maximum` === id), e.g. SparkLend
- *    declaring `min=max=1`;
- *  - an `exclusiveMin`/`exclusiveMax` interval that `id` falls inside, for the
- *    case where the API bounds a chain with strict inequalities instead of an
- *    enum.
- */
-export function supportsChain(param: ParamSpec, chainId: number): boolean {
-  if (param.numericEnum?.includes(chainId) === true) return true;
-  if (param.min === chainId && param.max === chainId) return true;
-  if (param.min !== undefined && param.max !== undefined
-    && param.min > param.max) return false;
-  const insideMin = param.exclusiveMin === undefined || chainId > param.exclusiveMin;
-  const insideMax = param.exclusiveMax === undefined || chainId < param.exclusiveMax;
-  const hasExclusiveBound = param.exclusiveMin !== undefined || param.exclusiveMax !== undefined;
-  return hasExclusiveBound && insideMin && insideMax;
-}
-
-/**
- * The chain ids an EVM tool advertises, read from its own `chain_id` parameter.
- *
- * Returns `null` when the tool has no `chain_id` parameter: such an endpoint is
- * chain-agnostic (or Solana-shaped) and must never be projected per chain.
- */
-export function evmChainIds(tool: CambrianToolMetadata): number[] | null {
-  const param = tool.params.find((candidate) => candidate.name === 'chain_id');
-  if (!param) return null;
-  return EVM_CHAINS.filter((chain) => supportsChain(param.spec, chain.id)).map((chain) => chain.id);
-}
-
-/**
- * Project every EVM tool onto the chains its own schema advertises.
- *
- * The API serves one `/api/v1/evm/*` surface whose `chain_id` enum lists the
- * chains an endpoint actually supports, and the MCP turns that into one
- * fixed-chain tool per supported chain so an agent never has to remember a
- * magic number and can never aim an endpoint at a chain it rejects. A tool that
- * names several chains yields several tools; a tool that names one yields one;
- * a tool with no `chain_id` is passed through untouched.
- *
- * Names follow `cambrian_<chain-slug>_<resource>`, except for the group's
- * primary chain, which keeps the unrenamed original.
- */
-export function projectEvmTools(tools: readonly CambrianToolMetadata[]): CambrianToolMetadata[] {
-  return tools.flatMap((tool) => {
-    const sourceChains = EVM_CHAINS.filter((chain) => chain.sourceGroup === tool.group);
-    if (sourceChains.length === 0) return [tool];
-    const chain = tool.params.find((param) => param.name === 'chain_id');
-    const project = (target: EvmChain): CambrianToolMetadata | null => {
-      if (!chain) {
-        // No chain_id: the endpoint is chain-agnostic. Only the primary chain of
-        // the group keeps its tool, so the catalog does not gain duplicates that
-        // would all call the identical endpoint.
-        return target.primary || sourceChains.length === 1 ? tool : null;
-      }
-      if (!supportsChain(chain.spec, target.id)) return null;
-      const { numericEnum: _numericEnum, ...spec } = chain.spec;
-      const renamed = target.primary !== true
-        ? {
-            name: tool.name.replace(new RegExp(`^cambrian_${tool.group}_`), `cambrian_${target.slug}_`),
-            description: tool.description.replace(
-              new RegExp(`(Cambrian )${tool.group}( )`, 'i'),
-              `$1${target.label}$2`,
-            ),
-          }
-        : {};
-      return {
-        ...tool,
-        ...renamed,
-        params: tool.params.map((param) => param === chain ? {
-          ...param,
-          spec: { ...spec, default: target.id, min: target.id, max: target.id },
-        } : param),
-      };
-    };
-    return sourceChains
-      .map(project)
-      .filter((candidate): candidate is CambrianToolMetadata => candidate !== null);
-  });
-}
-
-/**
  * Toolsets are the agent-facing grouping, which is not the same as the API
  * group: the one `base` metadata group projects into every chain in
  * `EVM_CHAINS`, so `evm` covers all of them. Naming them after what an agent
@@ -193,11 +92,11 @@ export function evmToolPrefixes(): string[] {
   return EVM_CHAINS.map((chain) => `cambrian_${chain.slug}_`);
 }
 
-const TOOLSET_PREFIX: Record<Toolset, readonly string[]> = {
-  solana: ['cambrian_solana_'],
-  evm: evmToolPrefixes(),
-  deep42: ['cambrian_deep42_'],
-  risk: ['cambrian_risk_'],
+const TOOLSET_GROUP: Record<Toolset, CambrianGroup> = {
+  solana: 'solana',
+  evm: 'base',
+  deep42: 'deep42',
+  risk: 'risk',
 };
 
 export function parseToolsets(value: string | undefined): Toolset[] {
@@ -211,12 +110,12 @@ export function parseToolsets(value: string | undefined): Toolset[] {
 }
 
 export function filterToolsets(
-  tools: readonly CambrianToolMetadata[],
+  tools: readonly CambrianTool[],
   toolsets: readonly Toolset[] | undefined,
-): CambrianToolMetadata[] {
+): CambrianTool[] {
   if (!toolsets || toolsets.length === 0) return [...tools];
-  const prefixes = toolsets.flatMap((toolset) => TOOLSET_PREFIX[toolset]);
-  return tools.filter((tool) => prefixes.some((prefix) => tool.name.startsWith(prefix)));
+  const groups = new Set(toolsets.map((toolset) => TOOLSET_GROUP[toolset]));
+  return tools.filter((tool) => groups.has(tool.group));
 }
 
 export const SERVER_NAME = 'cambrian-api-mcp';
@@ -350,62 +249,8 @@ async function loadRuntimeMetadata(
   return Object.fromEntries(entries) as Record<CambrianGroup, CambrianMetadataGroup>;
 }
 
-// The offline fallback is OUR snapshot of the live OpenAPI, not the `cambrian`
-// package's bundled registry. That registry ships on the package's own release
-// cadence and had drifted badly: no Ethereum projection, no exclusive bounds,
-// six endpoints the API had already removed. Regenerate with
-// `npm run registry:generate`.
-const BUNDLED_MCP_TOOLS = listRuntimeMetadataTools(OFFLINE_REGISTRY);
-
-/**
- * Restore exclusive numeric bounds the runtime OpenAPI parser dropped.
- *
- * `cambrian/schema` re-parses the live spec on every metadata load, and the
- * published 1.3.1 parser has no `exclusiveMinimum`/`exclusiveMaximum` support.
- * Because the live path takes priority over the bundled snapshot, a correct
- * snapshot alone does not help: `entry_price: 0` would pass validation and come
- * back as a bare upstream 422 instead of a corrective BELOW_MINIMUM.
- *
- * Only additive, and only for these two keys: a live param that carries no
- * bound where the snapshot has one is a parser gap, not a relaxed API. If the
- * API genuinely drops a `gt` constraint, the cost is one corrective error the
- * agent can act on -- much cheaper than the raw 422 it replaces. Delete this
- * once `cambrian` publishes a parser that keeps the bounds.
- */
-function restoreExclusiveBounds(tools: readonly CambrianToolMetadata[]): CambrianToolMetadata[] {
-  type Bounds = { exclusiveMin?: number; exclusiveMax?: number };
-  const bundled = new Map<string, Bounds>();
-  for (const tool of BUNDLED_MCP_TOOLS) {
-    for (const param of tool.params) {
-      const { exclusiveMin, exclusiveMax } = param.spec as Bounds;
-      if (exclusiveMin !== undefined || exclusiveMax !== undefined) {
-        bundled.set(`${tool.name}.${param.name}`, { exclusiveMin, exclusiveMax });
-      }
-    }
-  }
-  if (bundled.size === 0) return [...tools];
-  return tools.map((tool) => {
-    if (!tool.params.some((param) => bundled.has(`${tool.name}.${param.name}`))) return tool;
-    return {
-      ...tool,
-      params: tool.params.map((param) => {
-        const bounds = bundled.get(`${tool.name}.${param.name}`);
-        const spec = param.spec as Bounds;
-        if (!bounds || spec.exclusiveMin !== undefined || spec.exclusiveMax !== undefined) return param;
-        return { ...param, spec: { ...param.spec, ...bounds } };
-      }),
-    };
-  });
-}
-
-type McpParamSpec = ParamSpec & {
-  exclusiveMin?: number;
-  exclusiveMax?: number;
-  items?: NonNullable<ParamSpec['items']> & {
-    exclusiveMin?: number;
-    exclusiveMax?: number;
-  };
-};
+// Offline fallback: the registry bundled with the `cambrian` package.
+const BUNDLED_MCP_TOOLS = listCambrianCliTools(CAMBRIAN_METADATA_GROUPS);
 
 export interface JsonSchema {
   [key: string]: unknown;
@@ -425,66 +270,16 @@ export interface JsonSchema {
   maxItems?: number;
 }
 
-function schemaForItems(items: NonNullable<McpParamSpec['items']>): JsonSchema {
-  return {
-    type: items.type ?? 'string',
-    ...(items.enum ? { enum: items.enum } : {}),
-    ...(items.min !== undefined ? { minimum: items.min } : {}),
-    ...(items.max !== undefined ? { maximum: items.max } : {}),
-    ...(items.exclusiveMin !== undefined ? { exclusiveMinimum: items.exclusiveMin } : {}),
-    ...(items.exclusiveMax !== undefined ? { exclusiveMaximum: items.exclusiveMax } : {}),
-    ...(items.pattern ? { pattern: items.pattern } : {}),
+export function buildToolInputSchema(tool: CambrianTool): JsonSchema {
+  const schema = toolInputSchema(tool) as JsonSchema;
+  schema.properties = {
+    ...schema.properties,
+    _maxResponseLength: {
+      type: 'number',
+      description: `Optional maximum response length in characters. Default: ${DEFAULT_RESPONSE_MAX_LENGTH}.`,
+    },
   };
-}
-
-function schemaForParam(param: McpParamSpec): JsonSchema {
-  const schema: JsonSchema = {
-    type: param.type || 'string',
-  };
-  if (param.description) schema.description = param.description;
-  if (param.enum) schema.enum = param.enum;
-  if (param.numericEnum) schema.enum = param.numericEnum;
-  if (param.default !== undefined) schema.default = param.default;
-  if (param.min !== undefined) schema.minimum = param.min;
-  if (param.max !== undefined) schema.maximum = param.max;
-  if (param.exclusiveMin !== undefined) schema.exclusiveMinimum = param.exclusiveMin;
-  if (param.exclusiveMax !== undefined) schema.exclusiveMaximum = param.exclusiveMax;
-  if (param.pattern) schema.pattern = param.pattern;
-  if (param.items) schema.items = schemaForItems(param.items);
-  if (schema.type === 'array' && !schema.items) {
-    schema.items = { type: 'string' };
-  }
-  if (param.minItems !== undefined) schema.minItems = param.minItems;
-  if (param.maxItems !== undefined) schema.maxItems = param.maxItems;
   return schema;
-}
-
-/**
- * True when `tool.name` is a fixed-chain projection, i.e. one this server gave
- * a `cambrian_<chain-slug>_` prefix. Such a tool pins `chain_id` to one value,
- * so the parameter is redundant for the caller and is hidden from the schema.
- */
-export function isChainProjectedTool(tool: CambrianToolMetadata): boolean {
-  return EVM_CHAINS.some((chain) => tool.name.startsWith(`cambrian_${chain.slug}_`));
-}
-
-export function buildToolInputSchema(tool: CambrianToolMetadata, hideFixedChain = false): JsonSchema {
-  const properties: Record<string, JsonSchema> = {};
-  const required: string[] = [];
-  for (const param of tool.params) {
-    if (hideFixedChain && param.name === 'chain_id' && isChainProjectedTool(tool)) continue;
-    properties[param.name] = schemaForParam(param.spec);
-    if (param.spec.required === true && param.spec.default === undefined) required.push(param.name);
-  }
-  properties._maxResponseLength = {
-    type: 'number',
-    description: `Optional maximum response length in characters. Default: ${DEFAULT_RESPONSE_MAX_LENGTH}.`,
-  };
-  return {
-    type: 'object',
-    properties,
-    ...(required.length > 0 ? { required } : {}),
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -495,7 +290,7 @@ export function buildToolInputSchema(tool: CambrianToolMetadata, hideFixedChain 
  * Strip the `/api/v1/` (or `api/v1/`) prefix from a tool's apiPath so we get
  * the canonical docs-path segment (e.g. "solana/price-current", "evm/chains").
  */
-export function docPathForTool(tool: CambrianToolMetadata): string {
+export function docPathForTool(tool: CambrianTool): string {
   return tool.apiPath.replace(/^\/?api\/v1\//, '');
 }
 
@@ -601,7 +396,7 @@ export function baseServerInstructions(): string {
  *
  * Path format: normalized docs path (no `/api/v1/` prefix; base->evm alias).
  */
-function buildToolDescription(tool: CambrianToolMetadata): string {
+function buildToolDescription(tool: CambrianTool): string {
   const path = docPathForTool(tool);
   return (
     `${tool.description} ` +
@@ -610,21 +405,21 @@ function buildToolDescription(tool: CambrianToolMetadata): string {
 }
 
 /** The composite tool only makes sense when Solana tools are in scope. */
-function snapshotToolIfSolana(dataTools: readonly CambrianToolMetadata[]) {
+function snapshotToolIfSolana(dataTools: readonly CambrianTool[]) {
   return dataTools.some((tool) => tool.name.startsWith('cambrian_solana_'))
     ? [snapshotToolDefinition()]
     : [];
 }
 
 export function listMcpTools(
-  dataTools: readonly CambrianToolMetadata[] = projectEvmTools(BUNDLED_MCP_TOOLS),
+  dataTools: readonly CambrianTool[] = BUNDLED_MCP_TOOLS,
 ) {
   return [
     docsToolDefinition(),
     ...dataTools.map((tool) => ({
       name: tool.name,
       description: buildToolDescription(tool),
-      inputSchema: buildToolInputSchema(tool, true),
+      inputSchema: buildToolInputSchema(tool),
     })),
     // WS3: composite tools
     ...snapshotToolIfSolana(dataTools),
@@ -649,12 +444,12 @@ export function listMcpTools(
 const PROGRESSIVE_OMITTED_PARAMS = new Set(['offset', 'order_asc', 'order_desc']);
 
 export function listProgressiveMcpTools(
-  dataTools: readonly CambrianToolMetadata[] = projectEvmTools(BUNDLED_MCP_TOOLS),
+  dataTools: readonly CambrianTool[] = BUNDLED_MCP_TOOLS,
 ) {
   return [
     docsToolDefinition(),
     ...dataTools.map((tool) => {
-      const fullSchema = buildToolInputSchema(tool, true);
+      const fullSchema = buildToolInputSchema(tool);
       const properties = Object.fromEntries(
         Object.entries(fullSchema.properties ?? {})
           .filter(([name]) => name !== '_maxResponseLength' && !PROGRESSIVE_OMITTED_PARAMS.has(name))
@@ -886,7 +681,8 @@ type ArgumentErrorReason =
   | 'PATTERN_MISMATCH'
   | 'INVALID_ARRAY_ITEM'
   | 'TOO_FEW_ITEMS'
-  | 'TOO_MANY_ITEMS';
+  | 'TOO_MANY_ITEMS'
+  | 'INVALID_SORT';
 
 class ToolArgumentError extends Error {
   constructor(
@@ -911,7 +707,7 @@ function boundedReceived(value: unknown): unknown {
 function throwArgumentError(
   reason: ArgumentErrorReason,
   message: string,
-  tool: CambrianToolMetadata,
+  tool: CambrianTool,
   parameter: string,
   received: unknown,
   expected: Record<string, unknown>,
@@ -1015,190 +811,26 @@ export function toStructuredError(error: unknown): StructuredError {
 }
 
 /**
- * Coerce and validate a single argument against its ParamSpec.
- *
- * Mirrors the CLI's coerceValue (cambrian_cli/src/cli/dynamic-handler.ts:35-77)
- * for enum (case-insensitive -> canonical casing), integer/number with min/max,
- * and array splitting. Unlike the CLI, MCP arguments arrive already typed
- * (JSON), so this accepts BOTH string and number inputs and normalizes them.
- *
- * TODO(dedupe): once `cambrian` exports a shared coerceValue, import it from the
- * package instead of maintaining this parallel copy.
+ * Validate, default, and serialize tool arguments with the CLI's own code, so a
+ * tool call sends the same query as the matching `cambrian` command.
  */
-function coerceValue(value: unknown, spec: McpParamSpec, name: string, tool: CambrianToolMetadata): unknown {
-  const expected = schemaForParam(spec) as Record<string, unknown>;
-  // Enum: case-insensitive match against the canonical list. Accepts string or
-  // number inputs (e.g. interval enums supplied as numbers) by stringifying.
-  if (spec.enum) {
-    const asString = typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
-      ? String(value)
-      : null;
-    if (asString === null) {
-      throwArgumentError('INVALID_ENUM', `Parameter "${name}" must be one of: ${spec.enum.join(', ')}.`, tool, name, value, expected);
-    }
-    const match = spec.enum.find((e) => e.toLowerCase() === asString.toLowerCase());
-    if (!match) {
-      throwArgumentError('INVALID_ENUM', `Parameter "${name}" must be one of: ${spec.enum.join(', ')}.`, tool, name, value, expected);
-    }
-    return match;
+export function validateAndBuildParams(tool: CambrianTool, args: Record<string, unknown>): Record<string, unknown> {
+  const { _maxResponseLength: _ignored, ...toolArgs } = args;
+  try {
+    return buildToolQuery(tool, toolArgs);
+  } catch (error) {
+    if (!(error instanceof CliToolArgumentError)) throw error;
+    const name = error.param ?? '';
+    const param = tool.params.find((candidate) => candidate.name === name);
+    throwArgumentError(
+      error.code,
+      error.message,
+      tool,
+      name,
+      args[name],
+      param ? paramJsonSchema(param.spec) : { allowedParameters: tool.params.map((candidate) => candidate.name) },
+    );
   }
-
-  switch (spec.type) {
-    case 'integer': {
-      const n = typeof value === 'number'
-        ? value
-        : typeof value === 'string' && value.trim()
-          ? Number(value)
-          : Number.NaN;
-      if (!Number.isInteger(n)) {
-        throwArgumentError('INVALID_TYPE', `Parameter "${name}" must be an integer.`, tool, name, value, expected);
-      }
-      if (spec.numericEnum && !spec.numericEnum.includes(n)) {
-        throwArgumentError('INVALID_ENUM', `Parameter "${name}" must be one of: ${spec.numericEnum.join(', ')}.`, tool, name, value, expected);
-      }
-      if (spec.min !== undefined && n < spec.min) {
-        throwArgumentError('BELOW_MINIMUM', `Parameter "${name}" must be at least ${spec.min}.`, tool, name, value, expected);
-      }
-      if (spec.max !== undefined && n > spec.max) {
-        throwArgumentError('ABOVE_MAXIMUM', `Parameter "${name}" must be at most ${spec.max}.`, tool, name, value, expected);
-      }
-      if (spec.exclusiveMin !== undefined && n <= spec.exclusiveMin) {
-        throwArgumentError('BELOW_MINIMUM', `Parameter "${name}" must be greater than ${spec.exclusiveMin}.`, tool, name, value, expected);
-      }
-      if (spec.exclusiveMax !== undefined && n >= spec.exclusiveMax) {
-        throwArgumentError('ABOVE_MAXIMUM', `Parameter "${name}" must be less than ${spec.exclusiveMax}.`, tool, name, value, expected);
-      }
-      return n;
-    }
-    case 'number': {
-      const n = typeof value === 'number'
-        ? value
-        : typeof value === 'string' && value.trim()
-          ? Number(value)
-          : Number.NaN;
-      if (!Number.isFinite(n)) {
-        throwArgumentError('INVALID_TYPE', `Parameter "${name}" must be a number.`, tool, name, value, expected);
-      }
-      if (spec.min !== undefined && n < spec.min) {
-        throwArgumentError('BELOW_MINIMUM', `Parameter "${name}" must be at least ${spec.min}.`, tool, name, value, expected);
-      }
-      if (spec.max !== undefined && n > spec.max) {
-        throwArgumentError('ABOVE_MAXIMUM', `Parameter "${name}" must be at most ${spec.max}.`, tool, name, value, expected);
-      }
-      if (spec.exclusiveMin !== undefined && n <= spec.exclusiveMin) {
-        throwArgumentError('BELOW_MINIMUM', `Parameter "${name}" must be greater than ${spec.exclusiveMin}.`, tool, name, value, expected);
-      }
-      if (spec.exclusiveMax !== undefined && n >= spec.exclusiveMax) {
-        throwArgumentError('ABOVE_MAXIMUM', `Parameter "${name}" must be less than ${spec.exclusiveMax}.`, tool, name, value, expected);
-      }
-      return n;
-    }
-    case 'array': {
-      const values = Array.isArray(value)
-        ? value
-        : String(value).split(',').map((item) => item.trim());
-      if (spec.minItems !== undefined && values.length < spec.minItems) {
-        throwArgumentError(
-          'TOO_FEW_ITEMS',
-          `Parameter "${name}" must contain at least ${spec.minItems} items.`,
-          tool,
-          name,
-          values.length,
-          expected,
-        );
-      }
-      if (spec.maxItems !== undefined && values.length > spec.maxItems) {
-        throwArgumentError(
-          'TOO_MANY_ITEMS',
-          `Parameter "${name}" must contain at most ${spec.maxItems} items.`,
-          tool,
-          name,
-          values.length,
-          expected,
-        );
-      }
-      if (!spec.items) return values.map((item) => String(item).trim());
-      const itemSpec: McpParamSpec = {
-        required: true,
-        type: spec.items.type ?? 'string',
-        ...(spec.items.enum ? { enum: spec.items.enum } : {}),
-        ...(spec.items.min !== undefined ? { min: spec.items.min } : {}),
-        ...(spec.items.max !== undefined ? { max: spec.items.max } : {}),
-        ...(spec.items.exclusiveMin !== undefined ? { exclusiveMin: spec.items.exclusiveMin } : {}),
-        ...(spec.items.exclusiveMax !== undefined ? { exclusiveMax: spec.items.exclusiveMax } : {}),
-        ...(spec.items.pattern ? { pattern: spec.items.pattern } : {}),
-      };
-      return values.map((item, index) => {
-        try {
-          return coerceValue(item, itemSpec, name, tool);
-        } catch (error) {
-          if (!(error instanceof ToolArgumentError)) throw error;
-          throwArgumentError(
-            'INVALID_ARRAY_ITEM',
-            `Parameter "${name}" contains an invalid item at index ${index}. ${error.message}`,
-            tool,
-            name,
-            item,
-            expected,
-          );
-        }
-      });
-    }
-    case 'boolean': {
-      if (typeof value === 'boolean') return value;
-      const asString = String(value).toLowerCase();
-      if (asString === 'true') return true;
-      if (asString === 'false') return false;
-      throwArgumentError('INVALID_TYPE', `Parameter "${name}" must be a boolean.`, tool, name, value, expected);
-    }
-    default: {
-      if (typeof value !== 'string' && typeof value !== 'number') {
-        throwArgumentError('INVALID_TYPE', `Parameter "${name}" must be a string.`, tool, name, value, expected);
-      }
-      const asString = String(value);
-      if (spec.pattern && !new RegExp(spec.pattern).test(asString)) {
-        throwArgumentError('PATTERN_MISMATCH', `Parameter "${name}" must match ${spec.pattern}.`, tool, name, value, expected);
-      }
-      return asString;
-    }
-  }
-}
-
-export function validateAndBuildParams(tool: CambrianToolMetadata, args: Record<string, unknown>): Record<string, unknown> {
-  const allowed = new Set(tool.params.map((param) => param.name));
-  const params: Record<string, unknown> = {};
-  for (const key of Object.keys(args)) {
-    if (key === '_maxResponseLength') continue;
-    if (!allowed.has(key)) {
-      throwArgumentError(
-        'UNKNOWN_PARAMETER',
-        `Unknown parameter "${key}" for ${tool.name}.`,
-        tool,
-        key,
-        args[key],
-        { allowedParameters: [...allowed] },
-      );
-    }
-  }
-
-  for (const param of tool.params) {
-    const value = args[param.name];
-    if (value !== undefined && value !== null) {
-      params[param.name] = coerceValue(value, param.spec, param.name, tool);
-    } else if (param.spec.default !== undefined) {
-      params[param.name] = param.spec.default;
-    } else if (param.spec.required === true) {
-      throwArgumentError(
-        'MISSING_REQUIRED',
-        `Missing required parameter "${param.name}" for ${tool.name}.`,
-        tool,
-        param.name,
-        value,
-        schemaForParam(param.spec) as Record<string, unknown>,
-      );
-    }
-  }
-  return params;
 }
 
 /**
@@ -1332,7 +964,7 @@ export const fetchDocumentationForTest = fetchDocumentation;
 
 export async function callCambrianTool(
   client: CambrianData,
-  tool: CambrianToolMetadata,
+  tool: CambrianTool,
   args: Record<string, unknown>,
 ): Promise<unknown> {
   const params = validateAndBuildParams(tool, args);
@@ -1682,14 +1314,12 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
       controller.abort();
     }
   };
-  const getRawDataTools = (requestFetch = fetchFn): Promise<CambrianToolMetadata[]> =>
+  const getRawDataTools = (requestFetch = fetchFn): Promise<CambrianTool[]> =>
     (options.metadataProvider ? options.metadataProvider() : loadRuntimeMetadata(requestFetch))
-      .then(listRuntimeMetadataTools)
-      .then(restoreExclusiveBounds)
+      .then(listCambrianCliTools)
       .catch(() => BUNDLED_MCP_TOOLS);
-  const getDataTools = (requestFetch = fetchFn): Promise<CambrianToolMetadata[]> =>
+  const getDataTools = (requestFetch = fetchFn): Promise<CambrianTool[]> =>
     getRawDataTools(requestFetch)
-      .then(projectEvmTools)
       .then((tools) => filterToolsets(tools, options.toolsets));
   /**
    * Resolve a normalized docs path to a projected tool.
@@ -1703,18 +1333,16 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
     path: string,
     requestFetch = fetchFn,
     chainId?: number,
-  ): Promise<CambrianToolMetadata | undefined> => {
-    const projected = projectEvmTools(await getRawDataTools(requestFetch));
-    const matches = (candidate: CambrianToolMetadata) => {
+  ): Promise<CambrianTool | undefined> => {
+    const projected = await getRawDataTools(requestFetch);
+    const matches = (candidate: CambrianTool) => {
       const docPath = normalizeDocPath(docPathForTool(candidate));
       const groupPath = normalizeDocPath(`${candidate.apiGroup}/${candidate.resource}`);
       return docPath === path || groupPath === path;
     };
     const candidates = projected.filter(matches);
     if (chainId === undefined || candidates.length <= 1) return candidates[0];
-    const target = chainById(chainId);
-    const scoped = candidates.find((candidate) => target
-      && candidate.name.startsWith(`cambrian_${target.slug}_`));
+    const scoped = candidates.find((candidate) => candidate.chain?.chainId === chainId);
     return scoped ?? candidates[0];
   };
   const server = new Server(
@@ -1772,7 +1400,7 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
           throw new Error(`Unknown endpoint path: ${path}. Use cambrian_docs with query only to find a valid path.`);
         }
         if (tool && detail === 'schema') {
-          const inputSchema = buildToolInputSchema(tool, toolName !== '');
+          const inputSchema = buildToolInputSchema(tool);
           delete inputSchema.properties?._maxResponseLength;
           const callCard = {
             tool_name: tool.name,
@@ -1813,7 +1441,7 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
           docs = compactDocumentationDirectory(docs);
         }
         if (tool) {
-          const inputSchema = buildToolInputSchema(tool, toolName !== '');
+          const inputSchema = buildToolInputSchema(tool);
           delete inputSchema.properties?._maxResponseLength;
           const responseDocumentation = detail === 'response'
             ? responseDocumentationSection(docs)
@@ -1871,7 +1499,7 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
         return buildToolResult(result, maxLength, retrievedAt);
       }
 
-      let tool: CambrianToolMetadata | undefined;
+      let tool: CambrianTool | undefined;
       let toolArgs = args;
       if (name === COMPACT_CALL_TOOL_NAME) {
         const unexpected = Object.keys(args).filter((key) => ![

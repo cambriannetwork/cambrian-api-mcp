@@ -46,10 +46,10 @@ jobs:
           node dist/index.js --version
           node --input-type=module <<'NODE'
           const s = await import('./dist/server.js');
-          const m = await import('cambrian/metadata');
-          const r = await import('./dist/generated/offline-registry.js');
+          const { CAMBRIAN_METADATA_GROUPS } = await import('cambrian/metadata');
+          const { listCambrianCliTools } = await import('cambrian/tools');
           const names = s.listMcpTools().map(tool => tool.name);
-          const expected = s.projectEvmTools(m.listCambrianTools(r.OFFLINE_REGISTRY)).map(tool => tool.name);
+          const expected = listCambrianCliTools(CAMBRIAN_METADATA_GROUPS).map(tool => tool.name);
           if (new Set(names).size !== names.length ||
               names.includes('cambrian_health') ||
               !names.includes('cambrian_docs') ||

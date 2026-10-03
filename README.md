@@ -214,12 +214,10 @@ for response fields and `detail: "full"` for examples and all endpoint prose.
 Endpoint tools come from the same validated runtime registry as the CLI. MCP
 rechecks that local cache for each tool-list/tool-call request, while OpenAPI
 network attempts are coalesced and limited to once per source every 15 minutes.
-If runtime discovery is unavailable, the bundled inventory remains available
-without changing existing tool names or schemas. That inventory is this
-package's own snapshot of the live OpenAPI (`src/generated/offline-registry.ts`,
-regenerated with `npm run registry:generate`), not the `cambrian` package's
-bundled registry, so the offline catalog does not drift with that package's
-release cadence.
+If runtime discovery is unavailable, the server uses the endpoint metadata
+bundled with the installed `cambrian` package (`cambrian/metadata`). Tool names,
+schemas, and argument validation come from `cambrian/tools`, so each tool sends
+the same request as the matching `cambrian` CLI command.
 
 The API serves one generic `/api/v1/evm/*` surface whose `chain_id` parameter
 lists the chains each endpoint supports. The MCP turns that into one fixed-chain
@@ -245,9 +243,9 @@ the next metadata load. Base tools fix `chain_id` to `8453`, Ethereum tools to
 endpoint, with the chain-scoped forms returning that chain's pinned schema.
 Robinhood paths also accept `evm/4663/dexes` and `evm/robinhood/dexes`.
 
-The chain registry lives in `EVM_CHAINS` in `src/server.ts` and is the only
-place a chain is declared. To add a chain, add one entry there and run
-`npm run registry:generate`; see `.claude/skills/adding-a-chain/SKILL.md`.
+The chain table comes from the `cambrian` CLI (`EVM_CHAINS` in `cambrian/tools`).
+`src/server.ts` adds only `cambrian_docs` path aliases. To add a chain, add it
+to the CLI, release the CLI, and bump `cambrian` here.
 
 ## Development
 

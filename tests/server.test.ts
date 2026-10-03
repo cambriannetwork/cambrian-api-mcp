@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { CambrianData } from 'cambrian';
-import { CAMBRIAN_MCP_TOOLS, listCambrianTools as listRuntimeTools } from 'cambrian/metadata';
+import { CAMBRIAN_METADATA_GROUPS } from 'cambrian/metadata';
+import { listCambrianCliTools as listRuntimeTools } from 'cambrian/tools';
 import { OFFLINE_REGISTRY } from '../src/generated/offline-registry.js';
 import {
   COMPACT_CALL_TOOL_NAME,
@@ -23,7 +24,6 @@ import {
   chainBySlug,
   chainIdFromDocPath,
   chainSlugs,
-  evmChainIds,
   buildToolInputSchema,
   buildToolResult,
   callCambrianTool,
@@ -37,7 +37,6 @@ import {
   listCompactMcpTools,
   listProgressiveMcpTools,
   parseToolsets,
-  projectEvmTools,
   normalizeDocPath,
   tableResponseToStructured,
   toStructuredError,
@@ -45,6 +44,8 @@ import {
   withTimeout,
 } from '../src/server.js';
 import { ApiError, calls, resetCalls, setHangOpabinia, setUseBoundaryFetch } from './fixtures/cambrian.js';
+
+const CAMBRIAN_MCP_TOOLS = listRuntimeTools(CAMBRIAN_METADATA_GROUPS);
 
 // Build a mock fetch that maps exact URLs to {status, body, contentType}.
 function mockFetch(routes: Record<string, { status?: number; body: string; contentType?: string }>): typeof globalThis.fetch {
@@ -70,7 +71,7 @@ describe('Cambrian MCP tools', () => {
     const tools = listMcpTools();
     const names = tools.map((tool) => tool.name);
     expect(new Set(names).size).toBe(names.length);
-    expect(projectEvmTools(listRuntimeTools(OFFLINE_REGISTRY))
+    expect(listRuntimeTools(OFFLINE_REGISTRY)
       .every((tool) => names.includes(tool.name))).toBe(true);
     expect(names).not.toContain('cambrian_health');
     expect(names).toContain(DOCS_TOOL_NAME);
@@ -96,7 +97,7 @@ describe('Cambrian MCP tools', () => {
     const names = tools.map((tool) => tool.name);
     const holders = tools.find((tool) => tool.name === 'cambrian_solana_tokens_holders')!;
 
-    expect(projectEvmTools(listRuntimeTools(OFFLINE_REGISTRY))
+    expect(listRuntimeTools(OFFLINE_REGISTRY)
       .every((tool) => names.includes(tool.name))).toBe(true);
     expect(names).not.toContain(COMPACT_CALL_TOOL_NAME);
     expect(holders.inputSchema.required).toEqual(['program_id']);
@@ -129,9 +130,10 @@ describe('Cambrian MCP tools', () => {
     const tool = listRuntimeTools(OFFLINE_REGISTRY)
       .find((candidate) => candidate.name === 'cambrian_base_alien_v3_pools')!;
     const args = { limit: 5, offset: 20, order_desc: ['poolAddress'] };
-    expect(validateAndBuildParams(tool, args)).toMatchObject(args);
+    const sent = { ...args, order_desc: 'poolAddress' };
+    expect(validateAndBuildParams(tool, args)).toMatchObject(sent);
     await callCambrianTool(new CambrianData({ apiKey: 'test' }), tool, args);
-    expect(calls[0].params).toMatchObject(args);
+    expect(calls[0].params).toMatchObject(sent);
   });
 
   it('keeps a useful endpoint description in the progressive catalog', () => {
@@ -179,13 +181,13 @@ describe('Cambrian MCP tools', () => {
     }
   });
 
-  it('uses OpenAPI required fields and defaults instead of CLI conveniences', () => {
+  it('uses CLI required fields and advertises CLI conveniences as defaults', () => {
     const aeroPool = CAMBRIAN_MCP_TOOLS.find((tool) => tool.name === 'cambrian_base_aero_v2_pool');
     expect(aeroPool).toBeDefined();
     const schema = buildToolInputSchema(aeroPool!);
     expect(schema.required).toContain('pool_address');
-    expect(schema.required).toContain('apr_days_annualized');
-    expect(schema.properties?.apr_days_annualized).not.toHaveProperty('default');
+    expect(schema.required).not.toContain('apr_days_annualized');
+    expect(schema.properties?.apr_days_annualized).toMatchObject({ default: 30 });
 
     const risk = CAMBRIAN_MCP_TOOLS.find((tool) => tool.name === 'cambrian_risk_perp_risk_engine');
     expect(risk).toBeDefined();
@@ -289,7 +291,7 @@ describe('validateAndBuildParams coercion', () => {
     expect(() => validateAndBuildParams(holders, { wallet_address: '0xabc', limit: true }))
       .toThrow(/"limit" must be an integer/);
     expect(() => validateAndBuildParams(holders, { wallet_address: '0xabc', limit: '' }))
-      .toThrow(/"limit" must be an integer/);
+      .toThrow(/"limit" requires a value/);
   });
 
   it('rejects booleans and empty strings for number parameters', () => {
@@ -302,7 +304,7 @@ describe('validateAndBuildParams coercion', () => {
     expect(() => validateAndBuildParams(risk, { ...otherRequired, entry_price: true }))
       .toThrow(/"entry_price" must be a number/);
     expect(() => validateAndBuildParams(risk, { ...otherRequired, entry_price: '' }))
-      .toThrow(/"entry_price" must be a number/);
+      .toThrow(/"entry_price" requires a value/);
   });
 });
 
@@ -445,74 +447,6 @@ const ROOT_INDEX_SAMPLE = [
 // Toolsets: the context lever that costs nothing when unused. Defaulting to
 // the whole catalog keeps existing clients byte-identical; a client that names
 // its toolsets pays only for what it will call.
-// D4. `cambrian/schema` parses the live OpenAPI at runtime, and the published
-// 1.3.1 parser drops `exclusiveMinimum`/`exclusiveMaximum` entirely. The live
-// path normally wins over the bundled snapshot, so a correct snapshot is not
-// enough: without a restore step, `entry_price: 0` sails past validation and
-// comes back as a raw upstream 422 with no reason, parameter, or docs hint.
-describe('exclusive bounds survive a lossy runtime parser', () => {
-  // Same registry with both exclusive bounds stripped -- what the published
-  // `cambrian/schema` actually returns from a successful live fetch.
-  const lossy = () => {
-    const metadata = structuredClone(OFFLINE_REGISTRY) as Record<string, {
-      spec: Record<string, { params: Record<string, { exclusiveMin?: number; exclusiveMax?: number }> }>;
-    }>;
-    for (const group of Object.values(metadata)) {
-      for (const endpoint of Object.values(group.spec)) {
-        for (const param of Object.values(endpoint.params)) {
-          delete param.exclusiveMin;
-          delete param.exclusiveMax;
-        }
-      }
-    }
-    return metadata as unknown as typeof OFFLINE_REGISTRY;
-  };
-
-  it('strips them from the fixture, so the test is not vacuous', () => {
-    const stripped = listRuntimeTools(lossy())
-      .flatMap((tool) => tool.params)
-      .filter((param) => {
-        const spec = param.spec as { exclusiveMin?: number; exclusiveMax?: number };
-        return spec.exclusiveMin !== undefined || spec.exclusiveMax !== undefined;
-      });
-    expect(stripped).toEqual([]);
-  });
-
-  it('restores them from the bundled snapshot and still rejects the bad value', async () => {
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    const server = createCambrianMcpServer({ apiKey: 'test', metadataProvider: async () => lossy() });
-    const client = new Client({ name: 'lossy-parser-test', version: '1.0.0' }, { capabilities: {} });
-    const callCount = calls.length;
-    try {
-      await server.connect(serverTransport);
-      await client.connect(clientTransport);
-      const risk = (await client.listTools()).tools
-        .find((tool) => tool.name === 'cambrian_risk_perp_risk_engine');
-      expect(risk?.inputSchema.properties?.entry_price).toMatchObject({ exclusiveMinimum: 0 });
-
-      const result = await client.callTool({
-        name: 'cambrian_risk_perp_risk_engine',
-        arguments: {
-          token_address: 'So11111111111111111111111111111111111111112',
-          entry_price: 0,
-          leverage: 10,
-          direction: 'long',
-          risk_horizon: '1d',
-        },
-      });
-      const error = JSON.parse((result.content as Array<{ text: string }>)[0].text).error;
-      expect(error.reason).toBe('BELOW_MINIMUM');
-      expect(error.parameter).toBe('entry_price');
-      expect(error.expected).toMatchObject({ exclusiveMinimum: 0 });
-      // Rejected locally: no upstream request was spent on a value we knew was bad.
-      expect(calls).toHaveLength(callCount);
-    } finally {
-      await client.close();
-      await server.close();
-    }
-  });
-});
-
 describe('toolsets', () => {
   const listFor = async (toolsets?: string[]) => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -574,32 +508,12 @@ describe('toolsets', () => {
 });
 
 describe('bundled offline registry', () => {
-  const tools = projectEvmTools(listRuntimeTools(OFFLINE_REGISTRY));
+  const tools = listRuntimeTools(OFFLINE_REGISTRY);
   const named = (name: string) => tools.find((tool) => tool.name === name);
 
   it('projects the Ethereum mirror of the Base tools', () => {
     expect(tools.filter((tool) => tool.name.startsWith('cambrian_ethereum_')).length)
       .toBeGreaterThanOrEqual(29);
-  });
-
-  it('projects a single-chain EVM endpoint to that chain only', () => {
-    // SparkLend appeared in the API on 2026-08-28 declaring chain_id min=max=1
-    // (Ethereum only, no numericEnum). Projecting a Base twin would advertise a
-    // chain the endpoint rejects, so only the Ethereum tool may exist.
-    const source = listRuntimeTools(OFFLINE_REGISTRY)
-      .find((tool) => tool.name === 'cambrian_base_lending_morpho_markets');
-    if (!source) throw new Error('fixture tool missing from snapshot');
-    const ethereumOnly = {
-      ...source,
-      name: 'cambrian_base_single_chain_probe',
-      params: source.params.map((param) => param.name === 'chain_id'
-        ? { ...param, spec: { ...param.spec, numericEnum: undefined, min: 1, max: 1, default: 1 } }
-        : param),
-    };
-
-    const names = projectEvmTools([ethereumOnly] as never).map((tool) => tool.name);
-
-    expect(names).toEqual(['cambrian_ethereum_single_chain_probe']);
   });
 
   it('carries exclusive numeric bounds', () => {
@@ -637,35 +551,14 @@ describe('bundled offline registry', () => {
  */
 describe('EVM chain registry', () => {
   const sourceTools = listRuntimeTools(OFFLINE_REGISTRY);
-  const tools = projectEvmTools(sourceTools);
+  const tools = sourceTools;
   const byName = (name: string) => tools.find((tool) => tool.name === name);
-  const evmSources = sourceTools.filter((tool) =>
-    EVM_CHAINS.some((chain) => chain.sourceGroup === tool.group));
 
   it('declares a unique id and slug per chain, with one primary per source group', () => {
     expect(new Set(EVM_CHAINS.map((chain) => chain.id)).size).toBe(EVM_CHAINS.length);
     expect(new Set(EVM_CHAINS.map((chain) => chain.slug)).size).toBe(EVM_CHAINS.length);
     for (const group of new Set(EVM_CHAINS.map((chain) => chain.sourceGroup))) {
       expect(EVM_CHAINS.filter((chain) => chain.sourceGroup === group && chain.primary).length).toBe(1);
-    }
-  });
-
-  it('pins every primary chain to the chain_id the API already defaults to', () => {
-    // The primary chain keeps the group's original, unrenamed tool. If its id
-    // were not the spec's default, callers who omit chain_id would silently get
-    // a different chain than the primary tool advertises.
-    for (const chain of EVM_CHAINS.filter((candidate) => candidate.primary)) {
-      // Only endpoints that actually advertise more than one chain are relevant:
-      // a chain-exclusive endpoint (SparkLend, min=max=1) legitimately defaults to
-      // its one chain, and it never projects onto the primary.
-      const defaults = sourceTools
-        .filter((tool) => tool.group === chain.sourceGroup
-          && (evmChainIds(tool)?.length ?? 0) > 1)
-        .flatMap((tool) => tool.params)
-        .filter((param) => param.name === 'chain_id')
-        .map((param) => param.spec.default);
-      expect(defaults.length).toBeGreaterThan(0);
-      expect(new Set(defaults)).toEqual(new Set([chain.id]));
     }
   });
 
@@ -676,61 +569,6 @@ describe('EVM chain registry', () => {
     expect(chainById(999999)).toBeUndefined();
     expect(chainBySlug('dogechain')).toBeUndefined();
     expect(chainSlugs()).toEqual(EVM_CHAINS.map((chain) => chain.slug));
-  });
-
-  it('projects exactly the chains each endpoint itself advertises', () => {
-    // The whole contract: a chain gets a tool if and only if the endpoint's own
-    // chain_id allows it. No allowlist, no per-endpoint special case.
-    for (const source of evmSources) {
-      const advertised = evmChainIds(source);
-      const sourceChains = EVM_CHAINS.filter((chain) => chain.sourceGroup === source.group);
-      const expected = advertised === null
-        ? sourceChains.filter((chain) => chain.primary).map((chain) => chain.slug)
-        : sourceChains.filter((chain) => advertised.includes(chain.id)).map((chain) => chain.slug);
-      const actual = tools
-        .filter((tool) => tool.resource === source.resource
-          && tool.group === source.group
-          && sourceChains.some((chain) =>
-            tool.name === source.name || tool.name.startsWith(`cambrian_${chain.slug}_`)))
-        .map((tool) => {
-          const match = sourceChains.find((chain) => tool.name.startsWith(`cambrian_${chain.slug}_`));
-          return match ? match.slug : tool.name;
-        });
-      expect(actual.sort()).toEqual(expected.sort());
-    }
-  });
-
-  it('exposes one Arbitrum tool per endpoint whose chain_id allows 42161', () => {
-    const arbitrumEndpoints = evmSources
-      .filter((tool) => evmChainIds(tool)?.includes(42161) === true)
-      .map((tool) => tool.resource);
-    const arbitrumTools = tools.filter((tool) => tool.name.startsWith('cambrian_arbitrum_'));
-    expect(arbitrumEndpoints.length).toBeGreaterThan(0);
-    expect(arbitrumTools.map((tool) => tool.resource).sort())
-      .toEqual([...arbitrumEndpoints].sort());
-    // Spot-check the flagship endpoints an agent actually reaches for.
-    for (const resource of ['dexes', 'tokens', 'price-current', 'uniswap-v3-pools', 'tvl-status']) {
-      expect(byName(`cambrian_arbitrum_${resource.replace(/-/g, '_')}`)).toBeDefined();
-    }
-  });
-
-  it('exposes Robinhood tools only for endpoints that allow chain_id 4663', () => {
-    expect(chainById(4663)?.slug).toBe('robinhood');
-    expect(chainBySlug('robinhood')?.id).toBe(4663);
-    const robinhoodEndpoints = evmSources
-      .filter((tool) => evmChainIds(tool)?.includes(4663) === true)
-      .map((tool) => tool.resource);
-    const robinhoodTools = tools.filter((tool) => tool.name.startsWith('cambrian_robinhood_'));
-    expect(robinhoodEndpoints.length).toBeGreaterThanOrEqual(20);
-    expect(robinhoodTools.map((tool) => tool.resource).sort())
-      .toEqual([...robinhoodEndpoints].sort());
-    expect(byName('cambrian_robinhood_dexes')).toBeDefined();
-    expect(byName('cambrian_robinhood_tokens')).toBeDefined();
-    expect(byName('cambrian_robinhood_uniswap_v3_pools')).toBeUndefined();
-    expect(byName('cambrian_robinhood_aero_v2_pools')).toBeUndefined();
-    expect(normalizeDocPath('evm/4663/dexes')).toBe('evm/dexes');
-    expect(normalizeDocPath('evm/robinhood/dexes')).toBe('evm/dexes');
-    expect(chainIdFromDocPath('evm/robinhood/dexes')).toBe(4663);
   });
 
   it('sends Robinhood calls with chain_id 4663', async () => {
@@ -774,7 +612,7 @@ describe('EVM chain registry', () => {
           max: chain.id,
           enum: undefined,
         });
-        expect(buildToolInputSchema(tool, true).properties).not.toHaveProperty('chain_id');
+        expect(buildToolInputSchema(tool).properties).not.toHaveProperty('chain_id');
       }
     }
   });
@@ -1134,8 +972,8 @@ describe('server instructions', () => {
       expect(tools.find((tool) => tool.name === 'cambrian_base_dexes')?.inputSchema.properties)
         .not.toHaveProperty('chain_id');
       const aeroPool = tools.find((tool) => tool.name === 'cambrian_base_aero_v2_pool')!;
-      expect(aeroPool.inputSchema.properties.apr_days_annualized).not.toHaveProperty('default');
-      expect(aeroPool.inputSchema.required).toContain('apr_days_annualized');
+      expect(aeroPool.inputSchema.properties.apr_days_annualized).toHaveProperty('default', 30);
+      expect(aeroPool.inputSchema.required).not.toContain('apr_days_annualized');
       expect(tools.some((tool) => tool.name === COMPACT_CALL_TOOL_NAME)).toBe(false);
 
       const docs = await client.callTool({
@@ -1431,10 +1269,10 @@ describe('server instructions', () => {
       expect(result.structuredContent).toMatchObject({
         error: {
           code: 'BAD_REQUEST',
-          reason: 'INVALID_ARRAY_ITEM',
+          reason: 'INVALID_ENUM',
           tool: 'cambrian_base_alien_v3_pools',
           parameter: 'order_asc',
-          received: 'notAColumn',
+          received: ['notAColumn'],
           expected: {
             type: 'array',
             items: { type: 'string', enum: expect.arrayContaining(['poolAddress', 'createdAt']) },
@@ -1916,15 +1754,14 @@ describe('server instructions', () => {
     try {
       await server.connect(serverTransport);
       await client.connect(clientTransport);
-      // A chain-scoped path resolves to that chain's projected tool, whose
-      // chain_id is pinned; the schema reports the pin rather than the raw enum.
+      // A chain-scoped path resolves to that chain's tool, whose chain_id is
+      // pinned by the tool itself and so is not an argument.
       const arbitrumDocs = await client.callTool({
         name: DOCS_TOOL_NAME,
         arguments: { path: 'evm/42161/dexes' },
       });
-      expect(arbitrumDocs.structuredContent).toMatchObject({
-        inputSchema: { properties: { chain_id: { default: 42161, minimum: 42161, maximum: 42161 } } },
-      });
+      expect((arbitrumDocs.structuredContent as { inputSchema: { properties: object } }).inputSchema.properties)
+        .not.toHaveProperty('chain_id');
 
       // A generic path resolves to the group's primary chain tool, pinned to the
       // chain_id the API itself defaults to.
@@ -1932,9 +1769,8 @@ describe('server instructions', () => {
         name: DOCS_TOOL_NAME,
         arguments: { path: 'evm/dexes' },
       });
-      expect(baseDocs.structuredContent).toMatchObject({
-        inputSchema: { properties: { chain_id: { default: 8453, minimum: 8453, maximum: 8453 } } },
-      });
+      expect((baseDocs.structuredContent as { inputSchema: { properties: object } }).inputSchema.properties)
+        .not.toHaveProperty('chain_id');
 
       const result = await client.callTool({
         name: COMPACT_CALL_TOOL_NAME,

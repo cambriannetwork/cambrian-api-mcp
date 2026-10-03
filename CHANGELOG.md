@@ -7,6 +7,24 @@ Releases before 1.3.0 predate this file; see the
 [GitHub releases](https://github.com/cambriannetwork/cambrian-api-mcp/releases)
 for those.
 
+## [1.8.0] - 2026-10-03
+
+### Changed
+
+- Tools, input schemas, and argument validation now come from the `cambrian`
+  CLI (`cambrian/tools`, `cambrian@^1.8.0`). Each tool sends the same request
+  as the matching `cambrian` command. Tool names do not change.
+- Sort arrays (`order_asc`, `order_desc`) are sent as one comma-separated
+  value, as the CLI sends them.
+- Empty strings and hex numbers are rejected before any request.
+- `cambrian_solana_orca_pools` `dex`, `cambrian_solana_trending_tokens`
+  `order_by`, and `cambrian_base_aero_v2_pool` `apr_days_annualized` are now
+  optional. The CLI defaults apply when they are omitted.
+- **Breaking:** `price_current` on Ethereum, Arbitrum, and Robinhood Chain now
+  requires `token_address`. Before, an omitted address fell back to the Base
+  USDC address, and the API returned an empty result. Base keeps its USDC
+  default.
+
 ## [1.7.0] - 2026-09-23
 
 ### Added

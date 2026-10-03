@@ -128,6 +128,7 @@ const excluded = [
   'SECURITY.md',
   'docs/',
   'experiments/',
+  'scripts/tool-diff/',
   'node_modules/',
   'dist/',
   `${hidden('env')}*`,
