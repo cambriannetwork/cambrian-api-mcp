@@ -131,6 +131,21 @@ jobs:
             --data '{"jsonrpc":"2.0","method":"tools/list","params":{},"id":1}')"
           test "$unauth_http_status" = 401
 
+      # The MCP Registry rejects a version npm does not list yet (400 "version not found").
+      - name: Wait for npm to list the version
+        run: |
+          version="$(node -p "require('./server.json').version")"
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent "https://registry.npmjs.org/cambrian-api-mcp/$version" >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              echo "npm did not list cambrian-api-mcp@$version."
+              exit 1
+            fi
+            sleep 30
+          done
+
       - name: Install mcp-publisher
         run: |
           curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
