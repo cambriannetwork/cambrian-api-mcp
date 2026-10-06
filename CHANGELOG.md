@@ -7,6 +7,20 @@ Releases before 1.3.0 predate this file; see the
 [GitHub releases](https://github.com/cambriannetwork/cambrian-api-mcp/releases)
 for those.
 
+## [Unreleased]
+
+### Removed
+
+- The bundled offline registry snapshot (`dist/generated/offline-registry.js`,
+  about 92 KB) and the `registry:generate` and `registry:check` scripts. The
+  server has not read the snapshot since 1.8.0. The fallback is the metadata
+  bundled with `cambrian`.
+
+### Changed
+
+- The hosted server runs on Node.js 22. Node.js 20 reached end of life in
+  April 2026. `engines` still allows Node.js 20.
+
 ## [1.8.0] - 2026-10-03
 
 ### Changed

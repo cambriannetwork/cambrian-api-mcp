@@ -37,8 +37,6 @@
     "start": "node dist/index.js --transport http --host 0.0.0.0",
     "dev": "tsx src/index.ts",
     "clean": "rm -rf dist",
-    "registry:generate": "node scripts/generate-offline-registry.mjs",
-    "registry:check": "node scripts/generate-offline-registry.mjs --check",
     "test": "vitest run",
     "ci": "npm test && npm run build",
     "check:public": "node scripts/check-public-release.mjs",

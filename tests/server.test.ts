@@ -7,7 +7,6 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { CambrianData } from 'cambrian';
 import { CAMBRIAN_METADATA_GROUPS } from 'cambrian/metadata';
 import { listCambrianCliTools as listRuntimeTools } from 'cambrian/tools';
-import { OFFLINE_REGISTRY } from '../src/generated/offline-registry.js';
 import {
   COMPACT_CALL_TOOL_NAME,
   DOCS_TOOL_NAME,
@@ -71,7 +70,7 @@ describe('Cambrian MCP tools', () => {
     const tools = listMcpTools();
     const names = tools.map((tool) => tool.name);
     expect(new Set(names).size).toBe(names.length);
-    expect(listRuntimeTools(OFFLINE_REGISTRY)
+    expect(listRuntimeTools(CAMBRIAN_METADATA_GROUPS)
       .every((tool) => names.includes(tool.name))).toBe(true);
     expect(names).not.toContain('cambrian_health');
     expect(names).toContain(DOCS_TOOL_NAME);
@@ -97,7 +96,7 @@ describe('Cambrian MCP tools', () => {
     const names = tools.map((tool) => tool.name);
     const holders = tools.find((tool) => tool.name === 'cambrian_solana_tokens_holders')!;
 
-    expect(listRuntimeTools(OFFLINE_REGISTRY)
+    expect(listRuntimeTools(CAMBRIAN_METADATA_GROUPS)
       .every((tool) => names.includes(tool.name))).toBe(true);
     expect(names).not.toContain(COMPACT_CALL_TOOL_NAME);
     expect(holders.inputSchema.required).toEqual(['program_id']);
@@ -127,7 +126,7 @@ describe('Cambrian MCP tools', () => {
   // metadata, so an agent that learned `offset`/`order_desc` from the
   // instructions or from cambrian_docs can still send them.
   it('still accepts the parameters the progressive catalog omits', async () => {
-    const tool = listRuntimeTools(OFFLINE_REGISTRY)
+    const tool = listRuntimeTools(CAMBRIAN_METADATA_GROUPS)
       .find((candidate) => candidate.name === 'cambrian_base_alien_v3_pools')!;
     const args = { limit: 5, offset: 20, order_desc: ['poolAddress'] };
     const sent = { ...args, order_desc: 'poolAddress' };
@@ -452,7 +451,7 @@ describe('toolsets', () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const server = createCambrianMcpServer({
       apiKey: 'test',
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
       ...(toolsets ? { toolsets: toolsets as never } : {}),
     });
     const client = new Client({ name: 'toolset-test', version: '1.0.0' }, { capabilities: {} });
@@ -508,7 +507,7 @@ describe('toolsets', () => {
 });
 
 describe('bundled offline registry', () => {
-  const tools = listRuntimeTools(OFFLINE_REGISTRY);
+  const tools = listRuntimeTools(CAMBRIAN_METADATA_GROUPS);
   const named = (name: string) => tools.find((tool) => tool.name === name);
 
   it('projects the Ethereum mirror of the Base tools', () => {
@@ -550,7 +549,7 @@ describe('bundled offline registry', () => {
  * That property is the point -- see .claude/skills/adding-a-chain/SKILL.md.
  */
 describe('EVM chain registry', () => {
-  const sourceTools = listRuntimeTools(OFFLINE_REGISTRY);
+  const sourceTools = listRuntimeTools(CAMBRIAN_METADATA_GROUPS);
   const tools = sourceTools;
   const byName = (name: string) => tools.find((tool) => tool.name === name);
 
@@ -874,7 +873,7 @@ describe('server instructions', () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const server = createCambrianMcpServer({
       apiKey: 'test',
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
     });
     const client = new Client({ name: 'default-profile-test', version: '1.0.0' }, { capabilities: {} });
     try {
@@ -897,7 +896,7 @@ describe('server instructions', () => {
     const server = createCambrianMcpServer({
       apiKey: 'test',
       profile: 'compact',
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
     });
     const client = new Client({ name: 'compact-profile-test', version: '1.0.0' }, { capabilities: {} });
     try {
@@ -952,7 +951,7 @@ describe('server instructions', () => {
       apiKey: 'test',
       profile: 'progressive',
       fetch: fetchFn,
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
     });
     const client = new Client({ name: 'progressive-profile-test', version: '1.0.0' }, { capabilities: {} });
     try {
@@ -1047,7 +1046,7 @@ describe('server instructions', () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const server = createCambrianMcpServer({
       apiKey: 'test',
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
     });
     const client = new Client({ name: 'prefixed-tool-name-test', version: '1.0.0' }, { capabilities: {} });
     try {
@@ -1082,7 +1081,7 @@ describe('server instructions', () => {
         apiKey: 'test',
         profile,
         fetch: fetchFn,
-        metadataProvider: async () => OFFLINE_REGISTRY,
+        metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
       });
       const client = new Client({ name: `default-docs-${profile}`, version: '1.0.0' }, { capabilities: {} });
       try {
@@ -1135,7 +1134,7 @@ describe('server instructions', () => {
       apiKey: 'test',
       profile: 'progressive',
       fetch: fetchFn,
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
     });
     const client = new Client({ name: 'response-docs-test', version: '1.0.0' }, { capabilities: {} });
     try {
@@ -1176,7 +1175,7 @@ describe('server instructions', () => {
           body: '# Perp risk\n## Response Field Descriptions\n- `liquidation_probability`: Estimated probability.',
         },
       }),
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
     });
     const client = new Client({ name: 'risk-doc-path-test', version: '1.0.0' }, { capabilities: {} });
     try {
@@ -1204,7 +1203,7 @@ describe('server instructions', () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const server = createCambrianMcpServer({
       apiKey: 'test',
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
     });
     const client = new Client({ name: 'corrective-error-test', version: '1.0.0' }, { capabilities: {} });
     const callCount = calls.length;
@@ -1252,7 +1251,7 @@ describe('server instructions', () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const server = createCambrianMcpServer({
       apiKey: 'test',
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
     });
     const client = new Client({ name: 'array-error-test', version: '1.0.0' }, { capabilities: {} });
     const callCount = calls.length;
@@ -1290,7 +1289,7 @@ describe('server instructions', () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const server = createCambrianMcpServer({
       apiKey: 'test',
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
     });
     const client = new Client({ name: 'validation-matrix-test', version: '1.0.0' }, { capabilities: {} });
     const callCount = calls.length;
@@ -1370,7 +1369,7 @@ describe('server instructions', () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const server = createCambrianMcpServer({
       apiKey: 'test',
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
     });
     const client = new Client({ name: 'exclusive-bound-test', version: '1.0.0' }, { capabilities: {} });
     const callCount = calls.length;
@@ -1416,7 +1415,7 @@ describe('server instructions', () => {
       const server = createCambrianMcpServer({
         apiKey: 'test',
         profile,
-        metadataProvider: async () => OFFLINE_REGISTRY,
+        metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
       });
       const client = new Client({ name: `${profile}-validation-test`, version: '1.0.0' }, { capabilities: {} });
       try {
@@ -1455,7 +1454,7 @@ describe('server instructions', () => {
     const server = createCambrianMcpServer({
       apiKey: 'test',
       profile: 'compact',
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
     });
     const client = new Client({ name: 'compact-wrapper-test', version: '1.0.0' }, { capabilities: {} });
     const callCount = calls.length;
@@ -1499,7 +1498,7 @@ describe('server instructions', () => {
   });
 
   it('defers endpoint metadata during tool listing and documentation search', async () => {
-    const metadataProvider = vi.fn(async () => OFFLINE_REGISTRY);
+    const metadataProvider = vi.fn(async () => CAMBRIAN_METADATA_GROUPS);
     const fetchFn = mockFetch({
       [DOCS_ROOT_URL]: { body: '- GET /solana/price-current - Get the current token price.' },
     });
@@ -1537,7 +1536,7 @@ describe('server instructions', () => {
       apiKey: 'test',
       profile: 'compact',
       fetch: fetchFn,
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
     });
     const client = new Client({ name: 'compact-doc-schema-test', version: '1.0.0' }, { capabilities: {} });
     try {
@@ -1572,7 +1571,7 @@ describe('server instructions', () => {
       apiKey: 'test',
       profile: 'compact',
       fetch: mockFetch({}),
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
     });
     const client = new Client({ name: 'compact-doc-outage-test', version: '1.0.0' }, { capabilities: {} });
     try {
@@ -1601,7 +1600,7 @@ describe('server instructions', () => {
       apiKey: 'test',
       profile: 'compact',
       fetch: mockFetch({}),
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
     });
     const client = new Client({ name: 'compact-index-outage-test', version: '1.0.0' }, { capabilities: {} });
     try {
@@ -1628,7 +1627,7 @@ describe('server instructions', () => {
       fetch: mockFetch({
         [DOCS_ROOT_URL]: { body: '{"error":"temporary"}', contentType: 'application/json' },
       }),
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
     });
     const client = new Client({ name: 'compact-index-json-test', version: '1.0.0' }, { capabilities: {} });
     try {
@@ -1660,7 +1659,7 @@ describe('server instructions', () => {
       apiKey: 'test',
       profile: 'compact',
       fetch: mockFetch({ [DOCS_ROOT_URL]: { body: root } }),
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
     });
     const client = new Client({ name: 'compact-directory-test', version: '1.0.0' }, { capabilities: {} });
     try {
@@ -1693,7 +1692,7 @@ describe('server instructions', () => {
     const server = createCambrianMcpServer({
       apiKey: 'test',
       profile: 'compact',
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
     });
     const client = new Client({ name: 'compact-validation-test', version: '1.0.0' }, { capabilities: {} });
     const callCount = calls.length;
@@ -1718,9 +1717,9 @@ describe('server instructions', () => {
 
   it('rejects unsupported EVM chain IDs before a compact call reaches the API', async () => {
     const metadata = {
-      ...OFFLINE_REGISTRY,
+      ...CAMBRIAN_METADATA_GROUPS,
       base: {
-        ...OFFLINE_REGISTRY.base,
+        ...CAMBRIAN_METADATA_GROUPS.base,
         resources: ['dexes'],
         spec: {
           dexes: {
@@ -1738,7 +1737,7 @@ describe('server instructions', () => {
           },
         },
       },
-    } as unknown as typeof OFFLINE_REGISTRY;
+    } as unknown as typeof CAMBRIAN_METADATA_GROUPS;
     const fetchFn = mockFetch({
       [`${DOCS_BASE_URL}/evm/dexes/llms.txt`]: { body: '# GET /evm/dexes' },
     });
@@ -1798,7 +1797,7 @@ describe('server instructions', () => {
     const server = createCambrianMcpServer({
       apiKey: 'test',
       profile: 'compact',
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
     });
     const client = new Client({ name: 'compact-groups-test', version: '1.0.0' }, { capabilities: {} });
     try {
@@ -1845,7 +1844,7 @@ describe('server instructions', () => {
     const server = createCambrianMcpServer({
       apiKey: 'test',
       profile: 'compact',
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
     });
     const client = new Client({ name: 'compact-path-error-test', version: '1.0.0' }, { capabilities: {} });
     try {
@@ -1874,7 +1873,7 @@ describe('server instructions', () => {
       fetch: mockFetch({
         [DOCS_ROOT_URL]: { body: '- GET /solana/tokens/holders - Get current holders.' },
       }),
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
     });
     const client = new Client({ name: 'compact-unknown-doc-test', version: '1.0.0' }, { capabilities: {} });
     try {
@@ -1898,12 +1897,12 @@ describe('server instructions', () => {
   it('lists and executes tools from validated runtime metadata', async () => {
     const resource = 'social-data/new-signal';
     const metadata = {
-      ...OFFLINE_REGISTRY,
+      ...CAMBRIAN_METADATA_GROUPS,
       deep42: {
-        ...OFFLINE_REGISTRY.deep42,
-        resources: [...OFFLINE_REGISTRY.deep42.resources, resource],
+        ...CAMBRIAN_METADATA_GROUPS.deep42,
+        resources: [...CAMBRIAN_METADATA_GROUPS.deep42.resources, resource],
         spec: {
-          ...OFFLINE_REGISTRY.deep42.spec,
+          ...CAMBRIAN_METADATA_GROUPS.deep42.spec,
           [resource]: {
             apiPath: '/api/v1/deep42/social-data/new-signal',
             method: 'GET',
@@ -1945,9 +1944,9 @@ describe('server instructions', () => {
 
   it('lists and executes chain-specific Base and Ethereum tools', async () => {
     const metadata = {
-      ...OFFLINE_REGISTRY,
+      ...CAMBRIAN_METADATA_GROUPS,
       base: {
-        ...OFFLINE_REGISTRY.base,
+        ...CAMBRIAN_METADATA_GROUPS.base,
         resources: ['tokens', 'aero-v2-pools'],
         spec: {
           tokens: {
@@ -1979,7 +1978,7 @@ describe('server instructions', () => {
           },
         },
       },
-    } as unknown as typeof OFFLINE_REGISTRY;
+    } as unknown as typeof CAMBRIAN_METADATA_GROUPS;
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const server = createCambrianMcpServer({ apiKey: 'test', profile: 'full', metadataProvider: async () => metadata });
     const client = new Client({ name: 'ethereum-tools-test', version: '1.0.0' }, { capabilities: {} });
@@ -2114,14 +2113,14 @@ describe('server instructions', () => {
     let loads = 0;
     const metadataProvider = async () => {
       loads += 1;
-      if (loads === 1) return OFFLINE_REGISTRY;
+      if (loads === 1) return CAMBRIAN_METADATA_GROUPS;
       return {
-        ...OFFLINE_REGISTRY,
+        ...CAMBRIAN_METADATA_GROUPS,
         deep42: {
-          ...OFFLINE_REGISTRY.deep42,
-          resources: [...OFFLINE_REGISTRY.deep42.resources, resource],
+          ...CAMBRIAN_METADATA_GROUPS.deep42,
+          resources: [...CAMBRIAN_METADATA_GROUPS.deep42.resources, resource],
           spec: {
-            ...OFFLINE_REGISTRY.deep42.spec,
+            ...CAMBRIAN_METADATA_GROUPS.deep42.spec,
             [resource]: {
               apiPath: '/api/v1/deep42/social-data/new-signal',
               method: 'GET',
@@ -2283,7 +2282,7 @@ describe('buildToolResult', () => {
     const server = createCambrianMcpServer({
       apiKey: 'test',
       profile: 'full',
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
       fetch: (async () => new Response(JSON.stringify([{
         columns: [{ name: 'blockNumber', type: 'UInt64' }],
         data: [[123]],
@@ -2500,7 +2499,7 @@ describe('withTimeout', () => {
     const server = createCambrianMcpServer({
       apiKey: 'test',
       profile: 'full',
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
     });
     const client = new Client({ name: 'timeout-test', version: '1.0.0' }, { capabilities: {} });
     setHangOpabinia(true);
@@ -2556,7 +2555,7 @@ describe('withTimeout', () => {
     const server = createCambrianMcpServer({
       apiKey: 'test',
       fetch: fetchFn,
-      metadataProvider: async () => OFFLINE_REGISTRY,
+      metadataProvider: async () => CAMBRIAN_METADATA_GROUPS,
     });
     const client = new Client({ name: 'request-cancel-test', version: '1.0.0' }, { capabilities: {} });
     const controller = new AbortController();
