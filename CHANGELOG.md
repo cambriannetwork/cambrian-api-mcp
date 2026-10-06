@@ -7,7 +7,7 @@ Releases before 1.3.0 predate this file; see the
 [GitHub releases](https://github.com/cambriannetwork/cambrian-api-mcp/releases)
 for those.
 
-## [Unreleased]
+## [1.8.1] - 2026-10-06
 
 ### Removed
 
@@ -15,6 +15,11 @@ for those.
   about 92 KB) and the `registry:generate` and `registry:check` scripts. The
   server has not read the snapshot since 1.8.0. The fallback is the metadata
   bundled with `cambrian`.
+
+### Security
+
+- `proxy-addr` 2.0.8 (GHSA-jqcg-44mw-7w3h) and `source-map-js` 1.2.2
+  (GHSA-68fv-2mgg-jv7q) in the lockfile.
 
 ### Changed
 
