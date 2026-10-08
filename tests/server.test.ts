@@ -42,7 +42,7 @@ import {
   validateAndBuildParams,
   withTimeout,
 } from '../src/server.js';
-import { ApiError, calls, resetCalls, setHangOpabinia, setUseBoundaryFetch } from './fixtures/cambrian.js';
+import { ApiError, calls, resetCalls, setEvmChains, setHangOpabinia, setUseBoundaryFetch } from './fixtures/cambrian.js';
 
 const CAMBRIAN_MCP_TOOLS = listRuntimeTools(CAMBRIAN_METADATA_GROUPS);
 
@@ -656,6 +656,84 @@ describe('EVM chain registry', () => {
     expect(chainIdFromDocPath('evm/arbitrum/dexes')).toBe(42161);
     expect(chainIdFromDocPath('evm/dexes')).toBeUndefined();
     expect(chainIdFromDocPath('solana/price-current')).toBeUndefined();
+  });
+
+  it('names a chain the CLI has no row for exactly as the CLI does', async () => {
+    // The API starts serving chain 143 on one endpoint, with no OpenAPI name.
+    const groups = structuredClone(CAMBRIAN_METADATA_GROUPS);
+    const chainParam = groups.base.spec.tokens.params.chain_id!;
+    chainParam.numericEnum = [...chainParam.numericEnum!, 143];
+    const listNames = async () => {
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const server = createCambrianMcpServer({ apiKey: 'test', metadataProvider: async () => groups });
+      const client = new Client({ name: 'chain-names-test', version: '1.0.0' }, { capabilities: {} });
+      try {
+        await server.connect(serverTransport);
+        await client.connect(clientTransport);
+        return (await client.listTools()).tools.map((tool) => tool.name);
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    };
+    const start = 1_800_000_000_000;
+    const now = vi.spyOn(Date, 'now');
+    try {
+      // `/evm/chains` fails: the CLI's `chain-<id>` spelling.
+      now.mockReturnValue(start);
+      setEvmChains(new Error('offline'));
+      expect(await listNames()).toContain('cambrian_chain_143_tokens');
+      expect(chainBySlug('chain-143')?.id).toBe(143);
+
+      // After the registry TTL the lookup runs again and names the chain.
+      now.mockReturnValue(start + 16 * 60_000);
+      setEvmChains([{ columns: [{ name: 'id' }, { name: 'name' }], data: [[143, 'Monad']] }]);
+      const named = await listNames();
+      expect(named).toContain('cambrian_monad_tokens');
+      expect(named).not.toContain('cambrian_chain_143_tokens');
+      expect(normalizeDocPath('monad/tokens')).toBe('evm/tokens');
+      expect(normalizeDocPath('chain-143/tokens')).toBe('evm/tokens');
+      expect(chainIdFromDocPath('evm/143/tokens')).toBe(143);
+      expect(chainIdFromDocPath('evm/monad/tokens')).toBe(143);
+
+      // A failed refresh keeps the last good names.
+      now.mockReturnValue(start + 32 * 60_000);
+      setEvmChains(new Error('offline'));
+      expect(await listNames()).toContain('cambrian_monad_tokens');
+    } finally {
+      now.mockRestore();
+      setEvmChains(undefined);
+    }
+  });
+
+  it('keeps the chain-<id> tool name callable after a chain gets a name, as the CLI does', async () => {
+    // cambrian 1.10.0 named chain 56 `bnb`; before that the tools were cambrian_chain_56_*.
+    expect(chainById(56)?.slug).toBe('bnb');
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createCambrianMcpServer({ apiKey: 'test', metadataProvider: async () => CAMBRIAN_METADATA_GROUPS });
+    const client = new Client({ name: 'chain-alias-test', version: '1.0.0' }, { capabilities: {} });
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const names = (await client.listTools()).tools.map((tool) => tool.name);
+      expect(names).toContain('cambrian_bnb_tokens');
+      expect(names.some((name) => name.startsWith('cambrian_chain_56_'))).toBe(false);
+
+      for (const name of ['cambrian_bnb_tokens', 'cambrian_chain_56_tokens']) {
+        const result = await client.callTool({ name, arguments: { limit: 1 } });
+        expect(result.isError).not.toBe(true);
+        expect(calls.at(-1)).toMatchObject({ apiPath: '/api/v1/evm/tokens', params: { chain_id: 56, limit: 1 } });
+      }
+      const docs = await client.callTool({ name: DOCS_TOOL_NAME, arguments: { tool_name: 'cambrian_chain_56_tokens' } });
+      expect(docs.isError).not.toBe(true);
+      expect(JSON.stringify(docs.content)).toContain('cambrian_bnb_tokens');
+
+      const unknown = await client.callTool({ name: 'cambrian_chain_999_tokens', arguments: {} });
+      expect(unknown.isError).toBe(true);
+    } finally {
+      await client.close();
+      await server.close();
+    }
   });
 });
 

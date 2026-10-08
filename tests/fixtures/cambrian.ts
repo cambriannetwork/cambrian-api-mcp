@@ -38,6 +38,12 @@ export function setUseBoundaryFetch(value: boolean): void {
   useBoundaryFetch = value;
 }
 
+/** What `/api/v1/evm/chains` returns (an Error is thrown); undefined keeps the generic stub. */
+let evmChains: unknown;
+export function setEvmChains(value: unknown): void {
+  evmChains = value;
+}
+
 export class CambrianData {
   private readonly fetchFn: typeof globalThis.fetch;
 
@@ -50,6 +56,10 @@ export class CambrianData {
       calls.push({ client: 'opabinia', apiPath, params });
       if (useBoundaryFetch) return this.fetchFn(`https://opabinia.test${apiPath}`);
       if (hangOpabinia) return new Promise<never>(() => {});
+      if (apiPath === '/api/v1/evm/chains' && evmChains !== undefined) {
+        if (evmChains instanceof Error) throw evmChains;
+        return evmChains;
+      }
       if (apiPath === '/api/v1/solana/latest-block') {
         return [{
           columns: [{ name: 'blockNumber', type: 'UInt64' }],

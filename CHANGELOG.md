@@ -7,6 +7,33 @@ Releases before 1.3.0 predate this file; see the
 [GitHub releases](https://github.com/cambriannetwork/cambrian-api-mcp/releases)
 for those.
 
+## [Unreleased]
+
+## [1.9.0] - 2026-10-08
+
+### Changed
+
+- New EVM chains get the same tool names as the CLI's commands. When the live
+  schema serves a chain with no OpenAPI name, the server asks `/evm/chains`
+  with the caller's API key, at most once per 15 minutes, and keeps the last
+  good names. Example: `cambrian monad tokens` is `cambrian_monad_tokens`, not
+  `cambrian_chain_143_tokens`.
+- `cambrian_docs` paths accept every chain the live schema serves, by name or
+  `chain-<id>` (`monad/tokens`, `evm/143/tokens`), and the docs tool names
+  those chains.
+- BNB Smart Chain tools are `cambrian_bnb_*` (cambrian 1.10.0 names chain 56
+  `bnb`). Calls to the old `cambrian_chain_56_*` names still work. Every chain
+  tool answers to its `cambrian_chain_<id>_` name, as the CLI keeps
+  `chain-<id>` as an alias; those names are not listed.
+- Each `cambrian` release now releases the MCP. When Dependabot's bump passes
+  every check and the tool diff is additive, CI merges it, bumps this version,
+  deploys the hosted server, and publishes npm, the GitHub Release, and the MCP
+  Registry entry.
+
+### Dependencies
+
+- Requires `cambrian` ^1.10.0. Tool names, chains, and validation come from that release; see the [cambrian changelog](https://github.com/cambriannetwork/cambrian-cli/blob/main/CHANGELOG.md).
+
 ## [1.8.1] - 2026-10-06
 
 ### Removed

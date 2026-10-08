@@ -49,24 +49,63 @@ export const EVM_CHAINS: readonly EvmChain[] = CLI_EVM_CHAINS.map((chain, index)
   ...(CHAIN_ALIASES[chain.chainId] ? { aliases: CHAIN_ALIASES[chain.chainId] } : {}),
 }));
 
-export function chainById(chainId: number): EvmChain | undefined {
-  return EVM_CHAINS.find((chain) => chain.id === chainId);
+/**
+ * Chains the live schema serves that have no curated CLI row (e.g. `monad`, or
+ * `chain-<id>` when the API has no name for it). Set from each live tool list, so
+ * docs paths and prose follow the same chains as the tools.
+ */
+let discoveredChains: readonly EvmChain[] = [];
+
+function knownChains(): readonly EvmChain[] {
+  return [...EVM_CHAINS, ...discoveredChains];
 }
 
+function rememberChains(tools: CambrianTool[]): CambrianTool[] {
+  const curated = new Set(EVM_CHAINS.map((chain) => chain.id));
+  const extra = new Map<number, EvmChain>();
+  for (const { chain } of tools) {
+    if (!chain || curated.has(chain.chainId) || extra.has(chain.chainId)) continue;
+    extra.set(chain.chainId, {
+      id: chain.chainId,
+      slug: chain.command.replace(/-/g, '_'),
+      label: chain.label,
+      sourceGroup: chain.group,
+      aliases: [chain.command],
+    });
+  }
+  discoveredChains = [...extra.values()];
+  return tools;
+}
+
+export function chainById(chainId: number): EvmChain | undefined {
+  return knownChains().find((chain) => chain.id === chainId);
+}
+
+/**
+ * Finds a tool by name. A chain tool also answers to its `cambrian_chain_<id>_`
+ * spelling, the way the CLI keeps `chain-<id>` as an alias. When a release gives
+ * a chain a name (`chain-56` -> `bnb`), calls that use the old name still work.
+ */
+export function findToolByName(tools: readonly CambrianTool[], name: string): CambrianTool | undefined {
+  return tools.find((tool) => tool.name === name) ?? tools.find((tool) => tool.chain !== undefined &&
+    tool.name.replace(`cambrian_${tool.chain.command.replace(/-/g, '_')}_`, `cambrian_chain_${tool.chain.chainId}_`) === name);
+}
+
+/** Accepts a slug, an alias, or the CLI's `chain-<id>` spelling. */
 export function chainBySlug(slug: string): EvmChain | undefined {
   const needle = slug.trim().toLowerCase();
-  return EVM_CHAINS.find((chain) =>
-    chain.slug === needle || chain.aliases?.includes(needle) === true);
+  return knownChains().find((chain) =>
+    chain.slug === needle || chain.aliases?.includes(needle) === true || needle === `chain-${chain.id}`);
 }
 
 /** Chain slugs in catalog order, for prose and toolset prefixes. */
 export function chainSlugs(): string[] {
-  return EVM_CHAINS.map((chain) => chain.slug);
+  return knownChains().map((chain) => chain.slug);
 }
 
 /** Human-readable chain list, e.g. `Base, Ethereum, and Arbitrum`. */
 export function chainLabels(): string {
-  const labels = EVM_CHAINS.map((chain) => chain.label);
+  const labels = knownChains().map((chain) => chain.label);
   if (labels.length <= 1) return labels.join('');
   return `${labels.slice(0, -1).join(', ')}, and ${labels[labels.length - 1]}`;
 }
@@ -89,7 +128,7 @@ export type Toolset = typeof TOOLSETS[number];
 
 /** Chain tool prefixes for the `evm` toolset, derived from `EVM_CHAINS`. */
 export function evmToolPrefixes(): string[] {
-  return EVM_CHAINS.map((chain) => `cambrian_${chain.slug}_`);
+  return knownChains().map((chain) => `cambrian_${chain.slug}_`);
 }
 
 const TOOLSET_GROUP: Record<Toolset, CambrianGroup> = {
@@ -247,6 +286,71 @@ async function loadRuntimeMetadata(
     (await schema.loadRuntimeMetadataGroup(group, runtime)).metadata,
   ] as const));
   return Object.fromEntries(entries) as Record<CambrianGroup, CambrianMetadataGroup>;
+}
+
+/** Same as the CLI's `parseEvmChainNames`, which `cambrian` does not export. */
+function parseEvmChainNames(result: unknown): Record<string, string> {
+  const names: Record<string, string> = {};
+  for (const table of Array.isArray(result) ? result : [result]) {
+    if (!table || typeof table !== 'object') continue;
+    const { columns, data } = table as { columns?: unknown; data?: unknown };
+    if (!Array.isArray(columns) || !Array.isArray(data)) continue;
+    const column = (name: string) => columns.findIndex((entry) =>
+      (entry as { name?: unknown } | null)?.name === name);
+    const idIndex = column('id');
+    const nameIndex = column('name');
+    if (idIndex < 0 || nameIndex < 0) continue;
+    for (const row of data) {
+      if (!Array.isArray(row)) continue;
+      const id = row[idIndex];
+      const name = row[nameIndex];
+      if (Number.isSafeInteger(id) && (id as number) > 0 && typeof name === 'string' && name.length <= 64) {
+        names[String(id)] = name;
+      }
+    }
+  }
+  return names;
+}
+
+/** Last `/evm/chains` attempt, shared by every session: the names are the same for every key. */
+let evmChainNames: { attemptedAt: number; names: Promise<Record<string, string>> } | undefined;
+
+/**
+ * Names chains the way the CLI does. A chain with no curated row and no OpenAPI
+ * name projects as `chain-<id>`; the CLI then asks `/evm/chains` with the
+ * caller's key (at most once per registry TTL, keeping the last good names) and
+ * names the commands after it. Without this, the CLI says `cambrian monad tokens`
+ * and the MCP says `cambrian_chain_143_tokens`.
+ */
+async function withApiChainNames(
+  groups: Record<CambrianGroup, CambrianMetadataGroup>,
+  tools: CambrianTool[],
+  apiKey: string,
+  fetch: typeof globalThis.fetch,
+): Promise<CambrianTool[]> {
+  if (!tools.some((tool) => tool.chain?.command.startsWith('chain-'))) return tools;
+  const moduleName: string = 'cambrian/schema';
+  const { REGISTRY_TTL_MS, REGISTRY_FETCH_TIMEOUT_MS } = await import(moduleName) as {
+    REGISTRY_TTL_MS: number;
+    REGISTRY_FETCH_TIMEOUT_MS: number;
+  };
+  const now = Date.now();
+  // A future timestamp (clock skew) counts as expired, as in the CLI.
+  if (!evmChainNames || evmChainNames.attemptedAt > now || now >= evmChainNames.attemptedAt + REGISTRY_TTL_MS) {
+    const previous = evmChainNames?.names ?? Promise.resolve({});
+    const client = new CambrianData({ apiKey, fetch, timeoutMs: REGISTRY_FETCH_TIMEOUT_MS, maxRetries: 0 });
+    evmChainNames = {
+      attemptedAt: now,
+      names: client.opabinia.query('/api/v1/evm/chains', {})
+        .then(parseEvmChainNames)
+        .then((names) => (Object.keys(names).length > 0 ? names : previous))
+        // Names are cosmetic: keep the last good names and retry after the TTL.
+        .catch(() => previous),
+    };
+  }
+  const names = await evmChainNames.names;
+  if (Object.keys(names).length === 0) return tools;
+  return listCambrianCliTools({ ...groups, base: { ...groups.base, chainNames: names } });
 }
 
 // Offline fallback: the registry bundled with the `cambrian` package.
@@ -1316,8 +1420,9 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
   };
   const getRawDataTools = (requestFetch = fetchFn): Promise<CambrianTool[]> =>
     (options.metadataProvider ? options.metadataProvider() : loadRuntimeMetadata(requestFetch))
-      .then(listCambrianCliTools)
-      .catch(() => BUNDLED_MCP_TOOLS);
+      .then((groups) => withApiChainNames(groups, listCambrianCliTools(groups), options.apiKey, requestFetch))
+      .catch(() => BUNDLED_MCP_TOOLS)
+      .then(rememberChains);
   const getDataTools = (requestFetch = fetchFn): Promise<CambrianTool[]> =>
     getRawDataTools(requestFetch)
       .then((tools) => filterToolsets(tools, options.toolsets));
@@ -1388,7 +1493,7 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
           throw new Error('Provide only one of path, tool_name, or query.');
         }
         let tool = toolName
-          ? (await getDataTools(requestFetch)).find((candidate) => candidate.name === toolName)
+          ? findToolByName(await getDataTools(requestFetch), toolName)
           : path && !path.startsWith('guides/')
             ? await getToolByPath(path, requestFetch, requestedChain)
             : undefined;
@@ -1538,7 +1643,7 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
           throw new Error(`Unknown endpoint path: ${path}. Use cambrian_docs with query only to find a valid path.`);
         }
       } else {
-        tool = (await getDataTools(requestFetch)).find((candidate) => candidate.name === name);
+        tool = findToolByName(await getDataTools(requestFetch), name);
       }
       if (!tool) throw new Error(`Unknown tool: ${name}`);
 
