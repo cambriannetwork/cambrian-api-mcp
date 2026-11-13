@@ -11,7 +11,7 @@ Use this document to get connected and then to call tools well. If your runtime 
 
 Three kinds of tool:
 
-- **endpoint tools** — generated from API metadata for Solana, Base, Ethereum, Arbitrum, Deep42, and perpetual risk
+- **endpoint tools** — generated from API metadata for Solana, Base, Ethereum, Arbitrum, Robinhood Chain, BNB Smart Chain, Deep42, and perpetual risk
 - **composite workflow tools** — multi-endpoint reads in a single call, such as `cambrian_solana_token_snapshot`
 - **`cambrian_docs`** — live endpoint and guide documentation from `docs.cambrian.org/llms.txt`
 
@@ -51,8 +51,8 @@ For stdio, use `--toolsets solana,risk` or the `CAMBRIAN_TOOLSETS` environment
 variable. The flag wins over the variable. For HTTP, use `?toolsets=solana,risk`.
 An unknown name is an error that names the valid values.
 
-The full catalog is 111 tools. `solana` alone is 37 tools, `evm` is 69,
-`deep42` is 6, and `risk` is 2.
+The catalog follows the live API, so tool counts change. `evm` is by far the
+largest toolset, because each EVM endpoint gets one tool per supported chain.
 
 ## Authentication
 
@@ -194,7 +194,7 @@ Use this exact compact call shape:
 {
   "path": "solana/price-current",
   "parameters": {
-    "token_address": "So11111111111111111111111111111111111111112"
+    "token_addresses": "So11111111111111111111111111111111111111112"
   }
 }
 ```
@@ -274,8 +274,8 @@ Failures come back as a structured object, never as a raw HTML error page:
     "code": "BAD_REQUEST",
     "reason": "ABOVE_MAXIMUM",
     "parameter": "limit",
-    "received": 1001,
-    "expected": { "type": "integer", "minimum": 1, "maximum": 1000 },
+    "received": 10001,
+    "expected": { "type": "integer", "minimum": 1, "maximum": 10000 },
     "retryable": false
   }
 }

@@ -9,6 +9,30 @@ for those.
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-11-13
+
+### Changed
+
+- The tools come from `cambrian` 1.11.2. See the cambrian changelog for its
+  fixes since 1.10.0.
+- `cambrian_solana_token_snapshot` runs each section through the matching CLI
+  tool, so the parameters the CLI derives from the OpenAPI specs validate every
+  call. Before, the snapshot sent hand-written queries that nothing checked.
+- README, MARKETPLACE and the bundled skill now agree with the live OpenAPI
+  specs: `solana/price-current` takes `token_addresses`, the `limit` maximum
+  is 10000, and BNB Smart Chain (`cambrian_bnb_*`) is listed. The docs no
+  longer give tool counts, because the counts change.
+
+### Security
+
+- Updates dependencies with known advisories: `zod` 4.6.7, `body-parser`,
+  `hono` and `@hono/node-server`, `qs`, `fast-uri`, `ip-address`, and
+  `vitest` 4.1.12 (development only). `npm audit` reports 0 vulnerabilities.
+
+### Dependencies
+
+- Requires `cambrian` ^1.11.2. Tool names, chains, and validation come from that release; see the [cambrian changelog](https://github.com/cambriannetwork/cambrian-cli/blob/main/CHANGELOG.md).
+
 ## [1.9.0] - 2026-10-08
 
 ### Changed

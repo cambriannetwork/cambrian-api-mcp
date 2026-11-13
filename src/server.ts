@@ -244,24 +244,7 @@ function fetchWithParentSignal(
 async function loadRuntimeMetadata(
   fetch: typeof globalThis.fetch,
 ): Promise<Record<CambrianGroup, CambrianMetadataGroup>> {
-  const moduleName: string = 'cambrian/schema';
-  const schema = await import(moduleName) as {
-    loadRuntimeMetadataGroup: (
-      group: CambrianGroup,
-      runtime: {
-        stdout: (line: string) => void;
-        stdoutRaw: (text: string) => void;
-        stderr: (line: string) => void;
-        fetch: typeof globalThis.fetch;
-        env: Record<string, string | undefined>;
-        homedir: () => string;
-        isTTY: boolean;
-      },
-    ) => Promise<{
-      metadata: CambrianMetadataGroup;
-      status: { lastError?: string };
-    }>;
-  };
+  const schema = await import('cambrian/schema');
   const runtime = {
     stdout: () => {},
     stdoutRaw: () => {},
@@ -329,11 +312,8 @@ async function withApiChainNames(
   fetch: typeof globalThis.fetch,
 ): Promise<CambrianTool[]> {
   if (!tools.some((tool) => tool.chain?.command.startsWith('chain-'))) return tools;
-  const moduleName: string = 'cambrian/schema';
-  const { REGISTRY_TTL_MS, REGISTRY_FETCH_TIMEOUT_MS } = await import(moduleName) as {
-    REGISTRY_TTL_MS: number;
-    REGISTRY_FETCH_TIMEOUT_MS: number;
-  };
+  const { REGISTRY_TTL_MS, REGISTRY_FETCH_TIMEOUT_MS } = await import('cambrian/schema');
+
   const now = Date.now();
   // A future timestamp (clock skew) counts as expired, as in the CLI.
   if (!evmChainNames || evmChainNames.attemptedAt > now || now >= evmChainNames.attemptedAt + REGISTRY_TTL_MS) {
@@ -1279,46 +1259,37 @@ export async function callSolanaTokenSnapshot(
   tokenAddress: string,
   tokenSymbol: string | undefined,
   retrievedAt: string,
+  tools: readonly CambrianTool[] = BUNDLED_MCP_TOOLS,
 ): Promise<unknown> {
-  // price-volume only accepts the intraday enum 1h|2h|4h|8h|24h. Asking
-  // for "7d"/"30d" is a 400, so the multi-day windows are not available here.
+  // Each section is a CLI tool call, validated by the parameters the CLI derives
+  // from the OpenAPI specs. The bundled registry needs no network call, and the
+  // tests check every section against it, so a cambrian bump that renames a
+  // parameter or drops an enum value fails CI instead of degrading a section.
+  const section = (label: string, name: string, args: Record<string, unknown>) => trySection(label, () => {
+    const tool = tools.find((candidate) => candidate.name === name);
+    if (!tool) throw new Error(`${name} is not in the CLI tool list.`);
+    return callCambrianTool(client, tool, args);
+  });
+  // price-volume only accepts the intraday enum 1h|2h|4h|8h|24h, so the
+  // multi-day windows are not available here.
   const socialPromise = tokenSymbol
-    ? trySection('deep42-token-analysis', () =>
-        client.deep42.query('/social-data/token-analysis', { token_symbol: tokenSymbol })
-      )
-    : trySection('deep42-sentiment-shifts', () =>
-        client.deep42.query('/social-data/sentiment-shifts', {})
-      );
+    ? section('deep42-token-analysis', 'cambrian_deep42_social_data_token_analysis', { token_symbol: tokenSymbol })
+    : section('deep42-sentiment-shifts', 'cambrian_deep42_social_data_sentiment_shifts', {});
   const [details, price] = await Promise.all([
-    trySection('token-details', () =>
-      client.opabinia.query('/solana/token-details', { token_addresses: tokenAddress })
-    ),
-    trySection('price-current', () =>
-      client.opabinia.query('/solana/price-current', { token_addresses: tokenAddress })
-    ),
+    section('token-details', 'cambrian_solana_token_details', { token_addresses: tokenAddress }),
+    section('price-current', 'cambrian_solana_price_current', { token_addresses: tokenAddress }),
   ]);
   const [pv1h, pv4h] = await Promise.all([
-    trySection('price-volume-1h', () =>
-      client.opabinia.query('/solana/price-volume', { token_addresses: tokenAddress, timeframe: '1h' })
-    ),
-    trySection('price-volume-4h', () =>
-      client.opabinia.query('/solana/price-volume', { token_addresses: tokenAddress, timeframe: '4h' })
-    ),
+    section('price-volume-1h', 'cambrian_solana_price_volume', { token_addresses: tokenAddress, timeframe: '1h' }),
+    section('price-volume-4h', 'cambrian_solana_price_volume', { token_addresses: tokenAddress, timeframe: '4h' }),
   ]);
   const [pv24h, holders] = await Promise.all([
-    trySection('price-volume-24h', () =>
-      client.opabinia.query('/solana/price-volume', { token_addresses: tokenAddress, timeframe: '24h' })
-    ),
-    // The holders endpoint keys on `program_id` (the mint address), not
-    // `token_address`. Passing `token_address` is a 400.
-    trySection('token-holders', () =>
-      client.opabinia.query('/solana/tokens/holders', { program_id: tokenAddress, limit: 20 })
-    ),
+    section('price-volume-24h', 'cambrian_solana_price_volume', { token_addresses: tokenAddress, timeframe: '24h' }),
+    // The holders endpoint keys on `program_id` (the mint address).
+    section('token-holders', 'cambrian_solana_tokens_holders', { program_id: tokenAddress, limit: 20 }),
   ]);
   const [pools, social] = await Promise.all([
-    trySection('token-pool-search', () =>
-      client.opabinia.query('/solana/token-pool-search', { token_address: tokenAddress })
-    ),
+    section('token-pool-search', 'cambrian_solana_token_pool_search', { token_address: tokenAddress }),
     socialPromise,
   ]);
   return {

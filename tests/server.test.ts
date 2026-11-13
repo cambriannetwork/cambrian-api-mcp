@@ -2446,18 +2446,40 @@ describe('buildToolResult', () => {
 // WS3: Composite tools
 // ---------------------------------------------------------------------------
 
+const SOL_MINT = 'So11111111111111111111111111111111111111112';
+
 describe('callSolanaTokenSnapshot', () => {
   beforeEach(() => resetCalls());
+
+  it('runs each section through a CLI tool, so the OpenAPI parameters validate it', async () => {
+    const client = new CambrianData({ apiKey: 'test' });
+    const result = await callSolanaTokenSnapshot(client, 'not-a-mint', 'SOL', 'x') as {
+      details: { error?: { code: string } };
+    };
+    expect(result.details.error?.code).toBe('BAD_REQUEST');
+    expect(calls.some((call) => call.apiPath.endsWith('/solana/token-details'))).toBe(false);
+  });
+
+  it('reports a missing CLI tool as a section error', async () => {
+    const client = new CambrianData({ apiKey: 'test' });
+    const tools = CAMBRIAN_MCP_TOOLS.filter((tool) => tool.name !== 'cambrian_solana_price_volume');
+    const result = await callSolanaTokenSnapshot(client, SOL_MINT, 'SOL', 'x', tools) as {
+      priceVolume: { h1: { error?: { message: string } } };
+      price: { data?: unknown };
+    };
+    expect(result.priceVolume.h1.error?.message).toContain('cambrian_solana_price_volume');
+    expect(result.price.data).toBeDefined();
+  });
 
   it('reports a per-section error without throwing', async () => {
     const client = new CambrianData({ apiKey: 'test' });
     // Override opabinia to throw on one path.
     const original = client.opabinia.query.bind(client.opabinia);
     client.opabinia.query = async (path: string, params: Record<string, unknown>) => {
-      if (path === '/solana/token-details') throw new Error('details unavailable');
+      if (path.endsWith('/solana/token-details')) throw new Error('details unavailable');
       return original(path, params);
     };
-    const result = await callSolanaTokenSnapshot(client, 'TokenMint', 'SOL', '2026-01-01T00:00:00.000Z') as Record<string, unknown>;
+    const result = await callSolanaTokenSnapshot(client, SOL_MINT, 'SOL', '2026-01-01T00:00:00.000Z') as Record<string, unknown>;
     const details = result.details as { error?: { code: string; section: string } };
     expect(details.error).toBeDefined();
     expect(details.error!.code).toBe('MCP_ERROR');
@@ -2466,8 +2488,8 @@ describe('callSolanaTokenSnapshot', () => {
 
   it('makes concurrent calls across opabinia and deep42', async () => {
     const client = new CambrianData({ apiKey: 'test' });
-    const result = await callSolanaTokenSnapshot(client, 'TokenMint', 'SOL', '2026-01-01T00:00:00.000Z') as Record<string, unknown>;
-    expect(result.tokenAddress).toBe('TokenMint');
+    const result = await callSolanaTokenSnapshot(client, SOL_MINT, 'SOL', '2026-01-01T00:00:00.000Z') as Record<string, unknown>;
+    expect(result.tokenAddress).toBe(SOL_MINT);
     expect(result.tokenSymbol).toBe('SOL');
     // At least opabinia + deep42 calls happened
     const clients = new Set(calls.map((c) => c.client));
@@ -2477,7 +2499,7 @@ describe('callSolanaTokenSnapshot', () => {
 
   it('never calls the hidden Deep42 discovery endpoint', async () => {
     const client = new CambrianData({ apiKey: 'test' });
-    const result = await callSolanaTokenSnapshot(client, 'TokenMint', undefined, '2026-01-01T00:00:00.000Z') as {
+    const result = await callSolanaTokenSnapshot(client, SOL_MINT, undefined, '2026-01-01T00:00:00.000Z') as {
       deep42: Record<string, unknown>;
     };
     expect(calls.some((call) => call.apiPath.includes('/discovery/'))).toBe(false);
@@ -2487,7 +2509,7 @@ describe('callSolanaTokenSnapshot', () => {
 
   it('scopes the Deep42 section to the token when a symbol is given', async () => {
     const client = new CambrianData({ apiKey: 'test' });
-    const result = await callSolanaTokenSnapshot(client, 'TokenMint', 'SOL', 'x') as {
+    const result = await callSolanaTokenSnapshot(client, SOL_MINT, 'SOL', 'x') as {
       deep42: Record<string, unknown>;
     };
     expect(result.deep42.scope).toBe('token');
@@ -2497,12 +2519,11 @@ describe('callSolanaTokenSnapshot', () => {
 
   it('falls back to market-wide sentiment without a symbol', async () => {
     const client = new CambrianData({ apiKey: 'test' });
-    const result = await callSolanaTokenSnapshot(client, 'TokenMint', undefined, 'x') as {
+    const result = await callSolanaTokenSnapshot(client, SOL_MINT, undefined, 'x') as {
       deep42: Record<string, unknown>;
     };
     expect(result.deep42.scope).toBe('market-wide');
     expect(calls.some((call) => call.apiPath.endsWith('/social-data/sentiment-shifts'))).toBe(true);
-    expect(calls.every((call) => !call.apiPath.startsWith('/api/v1'))).toBe(true);
   });
 });
 
@@ -2732,22 +2753,16 @@ describe('composite tools send parameters their endpoints actually accept', () =
   beforeEach(() => resetCalls());
 
   /**
-   * Composites call `client.<service>.query()` directly, bypassing the
-   * metadata validation every generated tool goes through. That is how the
-   * snapshot shipped with `token_address` on an endpoint keyed by `program_id`
-   * and with `7d`/`30d` on an enum that only accepts 1h|2h|4h|8h|24h — both
-   * 400s, silently swallowed by per-section error tolerance.
-   *
-   * Replay every recorded call through validateAndBuildParams so any future
-   * drift fails here instead of degrading a section in production.
+   * The snapshot once shipped with `token_address` on an endpoint keyed by
+   * `program_id` and with `7d`/`30d` on an enum that only accepts
+   * 1h|2h|4h|8h|24h: both 400s, hidden by per-section error tolerance. Each
+   * section now runs through a CLI tool; replaying every recorded call through
+   * validateAndBuildParams keeps it that way.
    */
   function assertRecordedCallsValidate() {
     expect(calls.length).toBeGreaterThan(0);
     for (const call of calls) {
-      const metadataPath = call.client === 'deep42'
-        ? `/api/v1/deep42${call.apiPath}`
-        : `/api/v1${call.apiPath}`;
-      const tool = CAMBRIAN_MCP_TOOLS.find((candidate) => candidate.apiPath === metadataPath);
+      const tool = CAMBRIAN_MCP_TOOLS.find((candidate) => candidate.apiPath === call.apiPath);
       expect(tool, `Missing metadata for ${call.client} ${call.apiPath}`).toBeDefined();
       if (!tool) continue;
       expect(() => validateAndBuildParams(tool, call.params)).not.toThrow();

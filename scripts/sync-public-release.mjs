@@ -109,7 +109,8 @@ if (normalize(relative(sourceRoot, targetRoot)) === '') {
 }
 
 const remote = run('git', ['remote', '-v'], { cwd: targetRoot, capture: true });
-if (!remote.includes('github.com/cambriannetwork/cambrian-api-mcp.git')) {
+// HTTPS (github.com/...) or SSH (git@github.com:...); deploy.yml pushes over SSH.
+if (!/github\.com[:/]cambriannetwork\/cambrian-api-mcp\.git/.test(remote)) {
   throw new Error('Target remote must be github.com/cambriannetwork/cambrian-api-mcp.git');
 }
 

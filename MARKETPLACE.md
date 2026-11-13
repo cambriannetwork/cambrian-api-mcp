@@ -65,11 +65,12 @@ claude mcp add --transport http cambrian-api \
 - Orca, Raydium, Meteora, and token-pool search endpoints
 - Composite token resolution and snapshot workflows
 
-### Base/EVM
+### EVM
 
 - DEX discovery
-- Uniswap V2/V3, SushiSwap, and Aerodrome pool data
-- Base endpoints exposed with `cambrian_base_*` tool names
+- Uniswap V3, SushiSwap V3, PancakeSwap V3, Alienbase V3, and Aerodrome V2/V3 pool data
+- Lending: Aave, Euler, Fluid, Morpho, Sky, and SparkLend
+- One tool per chain: `cambrian_base_*`, `cambrian_ethereum_*`, `cambrian_arbitrum_*`, `cambrian_robinhood_*`, `cambrian_bnb_*`
 
 ### Deep42
 

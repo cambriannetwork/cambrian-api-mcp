@@ -42,14 +42,15 @@ it is how an agent bounds a response.
 
 ## Toolsets
 
-The whole catalog is 159 tools. An agent that only asks about Solana still pays
-for 116 EVM tools it will never call. Use `--toolsets` to load only what you
+The catalog follows the live API, so tool counts change. Most tools are EVM
+tools: each EVM endpoint gets one tool per supported chain. An agent that only
+asks about Solana still pays for all of them. Use `--toolsets` to load only what you
 need.
 
 | Toolset | Tools |
 | --- | --- |
 | `solana` | `cambrian_solana_*` and the Solana token snapshot |
-| `evm` | `cambrian_base_*`, `cambrian_ethereum_*`, `cambrian_arbitrum_*`, and `cambrian_robinhood_*` |
+| `evm` | `cambrian_base_*`, `cambrian_ethereum_*`, `cambrian_arbitrum_*`, `cambrian_robinhood_*`, and `cambrian_bnb_*` |
 | `deep42` | `cambrian_deep42_*` |
 | `risk` | `cambrian_risk_*` |
 
@@ -230,6 +231,7 @@ cannot aim an endpoint at a chain it rejects:
 | Ethereum | `1` | `cambrian_ethereum_*` |
 | Arbitrum | `42161` | `cambrian_arbitrum_*` |
 | Robinhood Chain | `4663` | `cambrian_robinhood_*` |
+| BNB Smart Chain | `56` | `cambrian_bnb_*` |
 
 A tool appears for a chain if and only if that endpoint's own `chain_id` schema
 allows the chain — from its `enum`, a fixed `minimum`/`maximum` pair, or an
