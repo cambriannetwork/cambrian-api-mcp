@@ -17,7 +17,10 @@ import {
   MAX_STRUCTURED_RECORDS,
   RISK_TOOL_TIMEOUT_MS,
   DEFAULT_TOOL_TIMEOUT_MS,
+  SERVER_ICONS,
+  SERVER_TITLE,
   SERVER_VERSION,
+  SERVER_WEBSITE_URL,
   baseServerInstructions,
   chainById,
   chainBySlug,
@@ -707,6 +710,86 @@ describe('EVM chain registry', () => {
     } finally {
       now.mockRestore();
     }
+  });
+
+  it('lists tools without a key and refuses tool calls with AUTH_REQUIRED', async () => {
+    resetCalls();
+    const fetch = vi.fn(async () => new Response('unexpected', { status: 500 })) as unknown as typeof globalThis.fetch;
+    const groups = structuredClone(CAMBRIAN_METADATA_GROUPS);
+    groups.base.spec.tokens.params.chain_id!.numericEnum!.push(143);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createCambrianMcpServer({ fetch, metadataProvider: async () => groups });
+    const client = new Client({ name: 'keyless-test', version: '1.0.0' }, { capabilities: {} });
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      expect(client.getServerVersion()).toMatchObject({ title: SERVER_TITLE, websiteUrl: SERVER_WEBSITE_URL, icons: SERVER_ICONS });
+      expect((await client.listTools()).tools.length).toBeGreaterThan(0);
+      for (const name of [DOCS_TOOL_NAME, 'cambrian_solana_latest_block']) {
+        const result = await client.callTool({ name, arguments: {} });
+        expect(result.isError).toBe(true);
+        expect((result.structuredContent as { error: { code: string } }).error.code).toBe('AUTH_REQUIRED');
+      }
+      // No keyless upstream call at all: no /evm/chains lookup, no data request.
+      expect(fetch).not.toHaveBeenCalled();
+      expect(calls).toHaveLength(0);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it('refreshes chain names only for a valid key and shares them with keyless callers', async () => {
+    // Chain 4242 has no curated row, no OpenAPI name, and no name from earlier tests.
+    const groups = structuredClone(CAMBRIAN_METADATA_GROUPS);
+    groups.base.spec.tokens.params.chain_id!.numericEnum!.push(4242);
+    let evmChains: Response = new Response('{}', { status: 401 });
+    const fetch = vi.fn(async () => evmChains.clone()) as unknown as typeof globalThis.fetch;
+    const listNames = async (apiKey?: string) => {
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const server = createCambrianMcpServer({ apiKey, fetch, metadataProvider: async () => groups });
+      const client = new Client({ name: 'chain-cache-test', version: '1.0.0' }, { capabilities: {} });
+      try {
+        await server.connect(serverTransport);
+        await client.connect(clientTransport);
+        return (await client.listTools()).tools.map((tool) => tool.name);
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    };
+    const start = 1_900_000_000_000;
+    const now = vi.spyOn(Date, 'now');
+    try {
+      now.mockReturnValue(start);
+      // A rejected key does not hold the lookup for the registry TTL.
+      expect(await listNames('bad-key')).not.toContain('cambrian_testchain_tokens');
+      evmChains = new Response(
+        JSON.stringify([{ columns: [{ name: 'id' }, { name: 'name' }], data: [[4242, 'Testchain']] }]),
+        { headers: { 'content-type': 'application/json' } },
+      );
+      expect(await listNames('good-key')).toContain('cambrian_testchain_tokens');
+      expect(fetch).toHaveBeenCalledTimes(2);
+
+      // A keyless caller gets the same names with no lookup, and keeps the shared chain table.
+      expect(await listNames()).toContain('cambrian_testchain_tokens');
+      expect(normalizeDocPath('testchain/tokens')).toBe('evm/tokens');
+      now.mockReturnValue(start + 16 * 60_000);
+      expect(await listNames()).toContain('cambrian_testchain_tokens');
+      expect(fetch).toHaveBeenCalledTimes(2);
+
+      // A later bad key keeps the names for everyone.
+      evmChains = new Response('{}', { status: 401 });
+      expect(await listNames('bad-key')).toContain('cambrian_testchain_tokens');
+      expect(await listNames()).toContain('cambrian_testchain_tokens');
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('keeps the display metadata in server.json the same as the server info', () => {
+    const serverJson = JSON.parse(readFileSync(join(__dirname, '..', 'server.json'), 'utf8'));
+    expect(serverJson).toMatchObject({ title: SERVER_TITLE, websiteUrl: SERVER_WEBSITE_URL, icons: SERVER_ICONS });
   });
 
   it('keeps the chain-<id> tool name callable after a chain gets a name, as the CLI does', async () => {

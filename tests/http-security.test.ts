@@ -33,18 +33,39 @@ async function withHttpApp(run: (baseUrl: string) => Promise<void>): Promise<voi
 describe('HTTP JSON boundary', () => {
   beforeEach(() => resetCalls());
 
-  it('rejects an unauthenticated request before parsing its body', async () => {
-    await withHttpApp(async (baseUrl) => {
-      const response = await fetch(`${baseUrl}/mcp`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json, text/event-stream',
-        },
-        body: JSON.stringify({ value: 'x'.repeat(300 * 1024) }),
-      });
+  const keylessPost = (baseUrl: string, body: unknown) => fetch(`${baseUrl}/mcp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+    body: JSON.stringify(body),
+  });
 
+  it('lets a client without a key initialize and list tools', async () => {
+    await withHttpApp(async (baseUrl) => {
+      const init = await keylessPost(baseUrl, {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'keyless', version: '1.0.0' } },
+      });
+      expect(init.status).toBe(200);
+      expect(await init.text()).toContain('"serverInfo"');
+
+      const list = await keylessPost(baseUrl, { jsonrpc: '2.0', id: 2, method: 'tools/list' });
+      expect(list.status).toBe(200);
+      expect(await list.text()).toContain('cambrian_docs');
+    });
+  });
+
+  it.each([
+    { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'cambrian_docs', arguments: {} } },
+    [{ jsonrpc: '2.0', id: 1, method: 'tools/list' }, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'cambrian_docs' } }],
+    [],
+    { value: 'not json-rpc' },
+  ])('rejects a tool call or other request without a key: %j', async (body) => {
+    await withHttpApp(async (baseUrl) => {
+      const response = await keylessPost(baseUrl, body);
       expect(response.status).toBe(401);
+      expect(await response.json()).toMatchObject({ error: { code: -32001 } });
     });
   });
 

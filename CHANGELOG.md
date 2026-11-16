@@ -9,6 +9,31 @@ for those.
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-11-16
+
+### Added
+
+- A client without a Cambrian API key can now send `initialize`, `ping` and
+  `tools/list`, so clients and directories can see the tools before sign-up.
+  Tool calls still need a key: over HTTP they get a 401, and over stdio they
+  return `AUTH_REQUIRED`. The stdio server now starts without
+  `CAMBRIAN_API_KEY`.
+- `server.json` and the `initialize` server info now give a title
+  (`Cambrian API`), a website (`https://www.cambrian.org`) and an icon.
+
+### Fixed
+
+- The hosted server shares one EVM chain-name lookup between all callers. A
+  caller with a rejected key (401/403) no longer holds the lookup for the
+  registry TTL: the next keyed caller looks the names up at once. A caller
+  without a key gets the last names a keyed caller got and never starts a
+  lookup, so it cannot reset the named chains (`cambrian_monad_*`) to
+  `chain-<id>` names for other callers.
+
+### Dependencies
+
+- Requires `cambrian` ^1.12.0. Tool names, chains, and validation come from that release; see the [cambrian changelog](https://github.com/cambriannetwork/cambrian-cli/blob/main/CHANGELOG.md).
+
 ## [1.11.0] - 2026-11-13
 
 ### Changed

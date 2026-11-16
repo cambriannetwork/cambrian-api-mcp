@@ -9,6 +9,7 @@ import { pathToFileURL } from 'url';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
+  AUTH_REQUIRED_MESSAGE,
   baseServerInstructions,
   createCambrianMcpServer,
   listCompactMcpTools,
@@ -116,6 +117,7 @@ function usage(): string {
     'Authentication:',
     '  stdio: set CAMBRIAN_API_KEY in the process environment.',
     '  http: send Authorization: Bearer <key> or X-Cambrian-Api-Key.',
+    '  Without a key, initialize and tools/list work and tool calls return AUTH_REQUIRED.',
   ].join('\n');
 }
 
@@ -172,18 +174,30 @@ export function validateOrigin(req: Request, res: Response): boolean {
   return false;
 }
 
-function validateMcpAccess(req: Request, res: Response, next: NextFunction): void {
-  if (!validateOrigin(req, res)) return;
-  if (extractApiKey(req)) {
+/**
+ * JSON-RPC methods a client may send without a key, so clients and directories
+ * can see the server and its tools before sign-up. Tool calls need a key.
+ */
+const PUBLIC_MCP_METHODS = new Set(['initialize', 'notifications/initialized', 'ping', 'tools/list']);
+
+export function isPublicMcpRequest(body: unknown): boolean {
+  const messages = Array.isArray(body) ? body : [body];
+  return messages.length > 0 && messages.every((message) =>
+    PUBLIC_MCP_METHODS.has((message as { method?: unknown } | null)?.method as string));
+}
+
+function requireOrigin(req: Request, res: Response, next: NextFunction): void {
+  if (validateOrigin(req, res)) next();
+}
+
+function requireKeyForCalls(req: Request, res: Response, next: NextFunction): void {
+  if (extractApiKey(req) || isPublicMcpRequest(req.body)) {
     next();
     return;
   }
   res.status(401).json({
     jsonrpc: '2.0',
-    error: {
-      code: -32001,
-      message: 'CAMBRIAN_API_KEY required. Provide Authorization: Bearer <key> or X-Cambrian-Api-Key.',
-    },
+    error: { code: -32001, message: AUTH_REQUIRED_MESSAGE },
     id: null,
   });
 }
@@ -200,11 +214,9 @@ export function createCorsOptions(): cors.CorsOptions {
 }
 
 async function runStdio(profile: CliOptions['profile'], toolsets: Toolset[]): Promise<void> {
-  const apiKey = process.env.CAMBRIAN_API_KEY;
+  const apiKey = process.env.CAMBRIAN_API_KEY || undefined;
   if (!apiKey) {
-    console.error('CAMBRIAN_API_KEY is required for stdio mode.');
-    process.exitCode = 2;
-    return;
+    console.error('CAMBRIAN_API_KEY is not set: tools are listed, but every tool call returns AUTH_REQUIRED.');
   }
   const instructions = baseServerInstructions();
   const server = createCambrianMcpServer({ apiKey, instructions, profile, toolsets });
@@ -268,10 +280,11 @@ export function createHttpApp(): express.Express {
   app.post(
     ['/mcp', '/mcp/compact', '/mcp/full'],
     limiter,
-    validateMcpAccess,
+    requireOrigin,
     express.json({ limit: '256kb' }),
+    requireKeyForCalls,
     async (req: Request, res: Response) => {
-      const apiKey = extractApiKey(req)!;
+      const apiKey = extractApiKey(req) ?? undefined;
       let toolsets: Toolset[];
       try {
         const raw = req.query.toolsets;

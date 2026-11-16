@@ -159,6 +159,14 @@ export function filterToolsets(
 }
 
 export const SERVER_NAME = 'cambrian-api-mcp';
+/** Display metadata; keep it the same as `title`, `websiteUrl` and `icons` in server.json. */
+export const SERVER_TITLE = 'Cambrian API';
+export const SERVER_WEBSITE_URL = 'https://www.cambrian.org';
+export const SERVER_ICONS = [
+  { src: 'https://www.cambrian.org/favicon.svg', mimeType: 'image/svg+xml', sizes: ['any'] },
+];
+export const AUTH_REQUIRED_MESSAGE =
+  'A Cambrian API key is required to call tools. stdio: set CAMBRIAN_API_KEY. HTTP: send Authorization: Bearer <key> or X-Cambrian-Api-Key.';
 // WS6: read SERVER_VERSION from package.json to avoid manual drift.
 export const SERVER_VERSION: string = (() => {
   try {
@@ -200,7 +208,8 @@ export const DOCS_BASE_URL = LLMS_BASE;
 export const DOCS_ROOT_URL = `${LLMS_BASE}/llms.txt`;
 
 export interface CambrianMcpServerOptions {
-  apiKey: string;
+  /** Without a key the server still lists tools, and every tool call returns AUTH_REQUIRED. */
+  apiKey?: string;
   profile?: 'compact' | 'progressive' | 'full';
   fetch?: typeof globalThis.fetch;
   signal?: AbortSignal;
@@ -277,7 +286,36 @@ async function loadRuntimeMetadata(
  * name is `chain-<id>` until `/evm/chains` names it (`cambrian_monad_tokens`).
  * One namer for every session, so one `/evm/chains` attempt per registry TTL.
  */
-const nameEvmChains = createEvmChainNamer();
+let nameEvmChains = createEvmChainNamer();
+/** The last names a keyed `/evm/chains` lookup gave, for callers without a key. */
+let lastChainNames: Record<string, string> | undefined;
+
+/**
+ * The CLI namer serves one user, so the hosted server adds two rules. A caller
+ * without a key gets the last names a keyed caller got, not `chain-<id>`: both
+ * see the same tool names, and `rememberChains` keeps the named chain table.
+ * A rejected key (401/403) says nothing about the API, so that attempt is
+ * dropped and the next keyed caller looks the names up at once.
+ */
+async function nameChains(
+  base: CambrianMetadataGroup,
+  apiKey: string | undefined,
+  fetch: typeof globalThis.fetch,
+): Promise<CambrianMetadataGroup> {
+  if (apiKey) {
+    const namer = nameEvmChains;
+    let rejected = false;
+    const named = await namer(base, apiKey, async (input, init) => {
+      const response = await fetch(input, init);
+      if (response.status === 401 || response.status === 403) rejected = true;
+      return response;
+    });
+    if (rejected && nameEvmChains === namer) nameEvmChains = createEvmChainNamer();
+    if (named.chainNames && named !== base) lastChainNames = named.chainNames;
+    if (named !== base || !lastChainNames) return named;
+  }
+  return lastChainNames ? { ...base, chainNames: { ...lastChainNames, ...base.chainNames } } : base;
+}
 
 // Offline fallback: the registry bundled with the `cambrian` package.
 const BUNDLED_MCP_TOOLS = listCambrianCliTools(CAMBRIAN_METADATA_GROUPS);
@@ -1311,7 +1349,7 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
   const fetchFn = fetchWithParentSignal(options.fetch ?? globalThis.fetch, options.signal);
   const responseMaxLength = options.responseMaxLength ?? DEFAULT_RESPONSE_MAX_LENGTH;
   const createClient = (requestFetch: typeof globalThis.fetch, signal: AbortSignal) => new CambrianData({
-    apiKey: options.apiKey,
+    apiKey: options.apiKey ?? '',
     fetch: fetchWithParentSignal(requestFetch, signal),
     timeoutMs: DEFAULT_TOOL_TIMEOUT_MS,
   });
@@ -1339,7 +1377,7 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
     (options.metadataProvider ? options.metadataProvider() : loadRuntimeMetadata(requestFetch))
       .then(async (groups) => listCambrianCliTools({
         ...groups,
-        base: await nameEvmChains(groups.base, options.apiKey, requestFetch),
+        base: await nameChains(groups.base, options.apiKey, requestFetch),
       }))
       .catch(() => BUNDLED_MCP_TOOLS)
       .then(rememberChains);
@@ -1371,7 +1409,13 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
     return scoped ?? candidates[0];
   };
   const server = new Server(
-    { name: SERVER_NAME, version: SERVER_VERSION },
+    {
+      name: SERVER_NAME,
+      version: SERVER_VERSION,
+      title: SERVER_TITLE,
+      websiteUrl: SERVER_WEBSITE_URL,
+      icons: SERVER_ICONS,
+    },
     {
       capabilities: { tools: {} },
       ...(options.instructions ? { instructions: options.instructions } : {}),
@@ -1395,6 +1439,9 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;
     const maxLength = getMaxResponseLength(args, responseMaxLength);
     const retrievedAt = new Date().toISOString();
+    if (!options.apiKey) {
+      return errorResult({ code: 'AUTH_REQUIRED', message: AUTH_REQUIRED_MESSAGE, status: 401, retryable: false });
+    }
     try {
       if (name === DOCS_TOOL_NAME) {
         const rawPath = typeof args.path === 'string' ? args.path : '';
@@ -1591,15 +1638,18 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
     } catch (error) {
       // Check for synthetic timeout before the generic structured error path.
       const timeoutErr = toTimeoutError(error);
-      const structured = timeoutErr ?? toStructuredError(error);
-      const errorPayload = { error: structured };
-      return {
-        content: [{ type: 'text', text: JSON.stringify(errorPayload, null, 2) }],
-        structuredContent: errorPayload,
-        isError: true,
-      };
+      return errorResult(timeoutErr ?? toStructuredError(error));
     }
   });
 
   return server;
+}
+
+function errorResult(structured: StructuredError) {
+  const errorPayload = { error: structured };
+  return {
+    content: [{ type: 'text' as const, text: JSON.stringify(errorPayload, null, 2) }],
+    structuredContent: errorPayload,
+    isError: true,
+  };
 }

@@ -1,17 +1,28 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.cambriannetwork/cambrian-api",
+  "title": "Cambrian API",
   "description": "Cambrian API MCP: Solana and EVM DeFi data, Deep42 social intelligence, and perpetual risk analysis.",
   "repository": {
     "url": "https://github.com/cambriannetwork/cambrian-api-mcp",
     "source": "github"
   },
-  "version": "1.11.0",
+  "websiteUrl": "https://www.cambrian.org",
+  "icons": [
+    {
+      "src": "https://www.cambrian.org/favicon.svg",
+      "mimeType": "image/svg+xml",
+      "sizes": [
+        "any"
+      ]
+    }
+  ],
+  "version": "1.12.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "cambrian-api-mcp",
-      "version": "1.11.0",
+      "version": "1.12.0",
       "transport": {
         "type": "stdio"
       },
