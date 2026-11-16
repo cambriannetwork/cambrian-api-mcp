@@ -124,12 +124,19 @@ jobs:
             fi
             sleep 10
           done
-          unauth_http_status="$(curl --silent --show-error --output /tmp/cambrian-unauth.json --write-out '%{http_code}' \
-            --request POST https://mcp.cambrian.org/mcp \
-            --header 'Content-Type: application/json' \
-            --header 'Accept: application/json, text/event-stream' \
-            --data '{"jsonrpc":"2.0","method":"tools/list","params":{},"id":1}')"
-          test "$unauth_http_status" = 401
+          # Since 1.12.0, a client without a key can list tools; tool calls still need a key.
+          keyless_post() {
+            curl --silent --show-error --output /tmp/cambrian-keyless.json --write-out '%{http_code}' \
+              --request POST https://mcp.cambrian.org/mcp \
+              --header 'Content-Type: application/json' \
+              --header 'Accept: application/json, text/event-stream' \
+              --data "$1"
+          }
+          list_http_status="$(keyless_post '{"jsonrpc":"2.0","method":"tools/list","params":{},"id":1}')"
+          test "$list_http_status" = 200
+          grep -q '"cambrian_docs"' /tmp/cambrian-keyless.json
+          call_http_status="$(keyless_post '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"cambrian_docs","arguments":{}},"id":2}')"
+          test "$call_http_status" = 401
 
       # The MCP Registry rejects a version npm does not list yet (400 "version not found").
       - name: Wait for npm to list the version
