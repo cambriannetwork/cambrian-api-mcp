@@ -9,6 +9,18 @@ for those.
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-11-13
+
+### Changed
+
+- EVM chain names come from the CLI's `createEvmChainNamer()` (`cambrian`
+  1.12.0). The MCP no longer keeps its own copy of the `/evm/chains` naming,
+  so its tool names, schemas, queries and chain names all come from the CLI.
+
+### Dependencies
+
+- Requires `cambrian` ^1.12.0. Tool names, chains, and validation come from that release; see the [cambrian changelog](https://github.com/cambriannetwork/cambrian-cli/blob/main/CHANGELOG.md).
+
 ## [1.10.0] - 2026-11-13
 
 ### Changed

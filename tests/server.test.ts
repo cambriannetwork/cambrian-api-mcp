@@ -42,7 +42,7 @@ import {
   validateAndBuildParams,
   withTimeout,
 } from '../src/server.js';
-import { ApiError, calls, resetCalls, setEvmChains, setHangOpabinia, setUseBoundaryFetch } from './fixtures/cambrian.js';
+import { ApiError, calls, resetCalls, setHangOpabinia, setUseBoundaryFetch } from './fixtures/cambrian.js';
 
 const CAMBRIAN_MCP_TOOLS = listRuntimeTools(CAMBRIAN_METADATA_GROUPS);
 
@@ -663,9 +663,14 @@ describe('EVM chain registry', () => {
     const groups = structuredClone(CAMBRIAN_METADATA_GROUPS);
     const chainParam = groups.base.spec.tokens.params.chain_id!;
     chainParam.numericEnum = [...chainParam.numericEnum!, 143];
+    // What `/evm/chains` answers: an error, or the TableResponse rows.
+    let evmChains: Error | unknown[] = new Error('offline');
+    const fetch = (async () => (evmChains instanceof Error
+      ? new Response('offline', { status: 503 })
+      : new Response(JSON.stringify(evmChains), { headers: { 'content-type': 'application/json' } }))) as typeof globalThis.fetch;
     const listNames = async () => {
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-      const server = createCambrianMcpServer({ apiKey: 'test', metadataProvider: async () => groups });
+      const server = createCambrianMcpServer({ apiKey: 'test', fetch, metadataProvider: async () => groups });
       const client = new Client({ name: 'chain-names-test', version: '1.0.0' }, { capabilities: {} });
       try {
         await server.connect(serverTransport);
@@ -681,13 +686,12 @@ describe('EVM chain registry', () => {
     try {
       // `/evm/chains` fails: the CLI's `chain-<id>` spelling.
       now.mockReturnValue(start);
-      setEvmChains(new Error('offline'));
       expect(await listNames()).toContain('cambrian_chain_143_tokens');
       expect(chainBySlug('chain-143')?.id).toBe(143);
 
       // After the registry TTL the lookup runs again and names the chain.
       now.mockReturnValue(start + 16 * 60_000);
-      setEvmChains([{ columns: [{ name: 'id' }, { name: 'name' }], data: [[143, 'Monad']] }]);
+      evmChains = [{ columns: [{ name: 'id' }, { name: 'name' }], data: [[143, 'Monad']] }];
       const named = await listNames();
       expect(named).toContain('cambrian_monad_tokens');
       expect(named).not.toContain('cambrian_chain_143_tokens');
@@ -698,11 +702,10 @@ describe('EVM chain registry', () => {
 
       // A failed refresh keeps the last good names.
       now.mockReturnValue(start + 32 * 60_000);
-      setEvmChains(new Error('offline'));
+      evmChains = new Error('offline');
       expect(await listNames()).toContain('cambrian_monad_tokens');
     } finally {
       now.mockRestore();
-      setEvmChains(undefined);
     }
   });
 

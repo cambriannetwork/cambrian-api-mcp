@@ -17,6 +17,7 @@ import {
   EVM_CHAINS as CLI_EVM_CHAINS,
   ToolArgumentError as CliToolArgumentError,
   buildToolQuery,
+  createEvmChainNamer,
   listCambrianCliTools,
   paramJsonSchema,
   toolInputSchema,
@@ -271,67 +272,12 @@ async function loadRuntimeMetadata(
   return Object.fromEntries(entries) as Record<CambrianGroup, CambrianMetadataGroup>;
 }
 
-/** Same as the CLI's `parseEvmChainNames`, which `cambrian` does not export. */
-function parseEvmChainNames(result: unknown): Record<string, string> {
-  const names: Record<string, string> = {};
-  for (const table of Array.isArray(result) ? result : [result]) {
-    if (!table || typeof table !== 'object') continue;
-    const { columns, data } = table as { columns?: unknown; data?: unknown };
-    if (!Array.isArray(columns) || !Array.isArray(data)) continue;
-    const column = (name: string) => columns.findIndex((entry) =>
-      (entry as { name?: unknown } | null)?.name === name);
-    const idIndex = column('id');
-    const nameIndex = column('name');
-    if (idIndex < 0 || nameIndex < 0) continue;
-    for (const row of data) {
-      if (!Array.isArray(row)) continue;
-      const id = row[idIndex];
-      const name = row[nameIndex];
-      if (Number.isSafeInteger(id) && (id as number) > 0 && typeof name === 'string' && name.length <= 64) {
-        names[String(id)] = name;
-      }
-    }
-  }
-  return names;
-}
-
-/** Last `/evm/chains` attempt, shared by every session: the names are the same for every key. */
-let evmChainNames: { attemptedAt: number; names: Promise<Record<string, string>> } | undefined;
-
 /**
- * Names chains the way the CLI does. A chain with no curated row and no OpenAPI
- * name projects as `chain-<id>`; the CLI then asks `/evm/chains` with the
- * caller's key (at most once per registry TTL, keeping the last good names) and
- * names the commands after it. Without this, the CLI says `cambrian monad tokens`
- * and the MCP says `cambrian_chain_143_tokens`.
+ * Names chains the way the CLI does: a chain with no curated row and no OpenAPI
+ * name is `chain-<id>` until `/evm/chains` names it (`cambrian_monad_tokens`).
+ * One namer for every session, so one `/evm/chains` attempt per registry TTL.
  */
-async function withApiChainNames(
-  groups: Record<CambrianGroup, CambrianMetadataGroup>,
-  tools: CambrianTool[],
-  apiKey: string,
-  fetch: typeof globalThis.fetch,
-): Promise<CambrianTool[]> {
-  if (!tools.some((tool) => tool.chain?.command.startsWith('chain-'))) return tools;
-  const { REGISTRY_TTL_MS, REGISTRY_FETCH_TIMEOUT_MS } = await import('cambrian/schema');
-
-  const now = Date.now();
-  // A future timestamp (clock skew) counts as expired, as in the CLI.
-  if (!evmChainNames || evmChainNames.attemptedAt > now || now >= evmChainNames.attemptedAt + REGISTRY_TTL_MS) {
-    const previous = evmChainNames?.names ?? Promise.resolve({});
-    const client = new CambrianData({ apiKey, fetch, timeoutMs: REGISTRY_FETCH_TIMEOUT_MS, maxRetries: 0 });
-    evmChainNames = {
-      attemptedAt: now,
-      names: client.opabinia.query('/api/v1/evm/chains', {})
-        .then(parseEvmChainNames)
-        .then((names) => (Object.keys(names).length > 0 ? names : previous))
-        // Names are cosmetic: keep the last good names and retry after the TTL.
-        .catch(() => previous),
-    };
-  }
-  const names = await evmChainNames.names;
-  if (Object.keys(names).length === 0) return tools;
-  return listCambrianCliTools({ ...groups, base: { ...groups.base, chainNames: names } });
-}
+const nameEvmChains = createEvmChainNamer();
 
 // Offline fallback: the registry bundled with the `cambrian` package.
 const BUNDLED_MCP_TOOLS = listCambrianCliTools(CAMBRIAN_METADATA_GROUPS);
@@ -1391,7 +1337,10 @@ export function createCambrianMcpServer(options: CambrianMcpServerOptions): Serv
   };
   const getRawDataTools = (requestFetch = fetchFn): Promise<CambrianTool[]> =>
     (options.metadataProvider ? options.metadataProvider() : loadRuntimeMetadata(requestFetch))
-      .then((groups) => withApiChainNames(groups, listCambrianCliTools(groups), options.apiKey, requestFetch))
+      .then(async (groups) => listCambrianCliTools({
+        ...groups,
+        base: await nameEvmChains(groups.base, options.apiKey, requestFetch),
+      }))
       .catch(() => BUNDLED_MCP_TOOLS)
       .then(rememberChains);
   const getDataTools = (requestFetch = fetchFn): Promise<CambrianTool[]> =>
